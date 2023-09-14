@@ -1,0 +1,15 @@
+[package]
+name = "pussy"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytemuck = { version = "1.14.0", features = [ "derive" ] }
+env_logger = "0.10.0"
+log = "0.4.20"
+notify = "6.1.1"
+pollster = "0.3.0"
+wgpu = { version = "0.17.0", features = [ "glsl" ] }
+winit = "0.28.6"
