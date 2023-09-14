@@ -1,6 +1,12 @@
+use crossterm::{
+    cursor::MoveTo,
+    terminal::{Clear, ClearType},
+};
 use naga::front::wgsl;
+use notify::Watcher;
 use std::{io::Write, path::Path};
-use crossterm::{cursor::MoveTo, terminal::{Clear, ClearType}};
+
+pub type WatcherEvents = std::sync::mpsc::Receiver<notify::Result<notify::event::Event>>;
 
 pub fn clear_screen() {
     let mut stdout = std::io::stdout();
@@ -8,9 +14,17 @@ pub fn clear_screen() {
     let _ = stdout.flush();
 }
 
-pub fn load_shader_module<P: AsRef<Path>>(
-    shader_path: P,
-) -> Result<String, wgsl::ParseError> {
+pub fn init_watcher(file_path: &impl AsRef<Path>) -> notify::Result<WatcherEvents> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let watcher_config =
+        notify::Config::default().with_poll_interval(std::time::Duration::from_millis(500));
+    let mut wathcer = notify::RecommendedWatcher::new(tx, watcher_config)?;
+    wathcer.watch(file_path.as_ref(), notify::RecursiveMode::NonRecursive)?;
+
+    Ok(rx)
+}
+
+pub fn load_shader_module<P: AsRef<Path>>(shader_path: P) -> Result<String, wgsl::ParseError> {
     let shader_source = std::fs::read_to_string(shader_path).expect("reading shader source");
     wgsl::parse_str(&shader_source).map(|_| shader_source)
 }

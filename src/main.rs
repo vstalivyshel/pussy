@@ -2,7 +2,6 @@ mod state;
 mod utils;
 
 use crate::state::State;
-use notify::Watcher;
 use std::path::PathBuf;
 use winit::{
     dpi::PhysicalSize,
@@ -11,12 +10,7 @@ use winit::{
     window::WindowBuilder,
 };
 
-// TODO: take a look at 'naga::front' for shader parsing
-
-async fn run(
-    shader_source: PathBuf,
-    rx: std::sync::mpsc::Receiver<notify::Result<notify::event::Event>>,
-) {
+async fn run(shader_path: PathBuf, watcher_events: crate::utils::WatcherEvents) {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("pussy")
@@ -25,16 +19,16 @@ async fn run(
         .build(&event_loop)
         .expect("create window");
 
-    let mut app_state = State::new(window, shader_source).await;
+    let mut app_state = State::new(window, shader_path).await;
 
     event_loop.run(move |ev, _, cf| {
         *cf = ControlFlow::Poll;
 
         match ev {
             Event::MainEventsCleared => {
-                while let Ok(change) = rx.try_recv() {
+                while let Ok(event) = watcher_events.try_recv() {
                     // TODO: handle errors and other events
-                    if let notify::event::EventKind::Modify(_) = change.unwrap().kind {
+                    if let notify::event::EventKind::Modify(_) = event.unwrap().kind {
                         app_state.rebuild_shader();
                     }
                 }
@@ -72,17 +66,8 @@ async fn run(
 fn main() {
     env_logger::init();
     crate::utils::clear_screen();
-
     // TODO: properly handle cl arguments
     let shader_path = PathBuf::from(std::env::args().nth(1).expect("shader path"));
-    let (tx, rx) = std::sync::mpsc::channel();
-    let watcher_config =
-        notify::Config::default().with_poll_interval(std::time::Duration::from_millis(500));
-    let mut wathcer = notify::RecommendedWatcher::new(tx, watcher_config).unwrap();
-
-    wathcer
-        .watch(&shader_path, notify::RecursiveMode::NonRecursive)
-        .unwrap();
-
-    pollster::block_on(run(shader_path, rx));
+    let watcher_events = crate::utils::init_watcher(&shader_path).expect("init watcher");
+    pollster::block_on(run(shader_path, watcher_events));
 }

@@ -96,11 +96,15 @@ impl State {
     pub fn rebuild_shader(&mut self) {
         crate::utils::clear_screen();
         match load_shader_module(&self.shader_path) {
-            Ok(shader_src) => self.render_pipeline = create_render_pipeline(&self.device, &shader_src, self.config.format),
-            Err(parsing_error) => {
-                let err = parsing_error.emit_to_string(&self.shader_source);
-                println!("Shader {path:?} parsing {err}", path = self.shader_path);
-            },
+            Ok(shader_src) => {
+                self.render_pipeline =
+                    create_render_pipeline(&self.device, &shader_src, self.config.format)
+            }
+            Err(parsing_error) => println!(
+                "{path:?} parsing {err}",
+                path = self.shader_path,
+                err = parsing_error.emit_to_string(&self.shader_source),
+            ),
         }
     }
 
