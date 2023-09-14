@@ -1,25 +1,30 @@
-use std::path::Path;
+use naga::front::wgsl;
+use std::{io::Write, path::Path};
+use crossterm::{cursor::MoveTo, terminal::{Clear, ClearType}};
 
-pub fn create_shader_module<P: AsRef<Path>>(
-    device: &wgpu::Device,
+pub fn clear_screen() {
+    let mut stdout = std::io::stdout();
+    let _ = crossterm::execute!(stdout, MoveTo(0, 0), Clear(ClearType::All));
+    let _ = stdout.flush();
+}
+
+pub fn load_shader_module<P: AsRef<Path>>(
     shader_path: P,
-) -> wgpu::ShaderModule {
-    // TODO: catch invalid path error
-    let shader_source =
-        std::fs::read_to_string(shader_path.as_ref()).expect("reading shader source");
-    let shader_desc = wgpu::ShaderModuleDescriptor {
-        label: None,
-        source: wgpu::ShaderSource::Wgsl(shader_source.into()),
-    };
-
-    device.create_shader_module(shader_desc)
+) -> Result<String, wgsl::ParseError> {
+    let shader_source = std::fs::read_to_string(shader_path).expect("reading shader source");
+    wgsl::parse_str(&shader_source).map(|_| shader_source)
 }
 
 pub fn create_render_pipeline(
     device: &wgpu::Device,
-    shader_module: &wgpu::ShaderModule,
+    shader_src: &str,
     texture_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
+    let module = &device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(shader_src.into()),
+    });
+
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
         bind_group_layouts: &[],
@@ -30,12 +35,12 @@ pub fn create_render_pipeline(
         label: Some("Render Pipeline"),
         layout: Some(&render_pipeline_layout),
         vertex: wgpu::VertexState {
-            module: shader_module,
+            module,
             entry_point: "vs_main",
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
-            module: shader_module,
+            module,
             entry_point: "fs_main",
             targets: &[Some(wgpu::ColorTargetState {
                 format: texture_format,

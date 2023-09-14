@@ -1,4 +1,4 @@
-use crate::utils::{create_render_pipeline, create_shader_module};
+use crate::utils::{create_render_pipeline, load_shader_module};
 use std::path::PathBuf;
 use winit::{dpi::PhysicalSize, event::*, window::Window};
 
@@ -9,12 +9,19 @@ pub struct State {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
-    shader_source: PathBuf,
+    shader_path: PathBuf,
+    shader_source: String,
     window: Window,
 }
 
+impl Drop for State {
+    fn drop(&mut self) {
+        crate::utils::clear_screen();
+    }
+}
+
 impl State {
-    pub async fn new(window: Window, shader_source: PathBuf) -> Self {
+    pub async fn new(window: Window, shader_path: PathBuf) -> Self {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
         let surface = unsafe { instance.create_surface(&window) }.unwrap();
@@ -59,8 +66,9 @@ impl State {
 
         surface.configure(&device, &config);
 
-        let shader = create_shader_module(&device, &shader_source);
-        let render_pipeline = create_render_pipeline(&device, &shader, config.format);
+        // TODO: handle error
+        let shader_source = load_shader_module(&shader_path).unwrap();
+        let render_pipeline = create_render_pipeline(&device, &shader_source, config.format);
 
         Self {
             surface,
@@ -69,6 +77,7 @@ impl State {
             config,
             size,
             render_pipeline,
+            shader_path,
             shader_source,
             window,
         }
@@ -85,8 +94,14 @@ impl State {
     pub fn update(&self) {}
 
     pub fn rebuild_shader(&mut self) {
-        let shader = create_shader_module(&self.device, &self.shader_source);
-        self.render_pipeline = create_render_pipeline(&self.device, &shader, self.config.format);
+        crate::utils::clear_screen();
+        match load_shader_module(&self.shader_path) {
+            Ok(shader_src) => self.render_pipeline = create_render_pipeline(&self.device, &shader_src, self.config.format),
+            Err(parsing_error) => {
+                let err = parsing_error.emit_to_string(&self.shader_source);
+                println!("Shader {path:?} parsing {err}", path = self.shader_path);
+            },
+        }
     }
 
     pub fn resize(&mut self, new_size: PhysicalSize<u32>) {

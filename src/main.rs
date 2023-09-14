@@ -71,6 +71,7 @@ async fn run(
 
 fn main() {
     env_logger::init();
+    crate::utils::clear_screen();
 
     // TODO: properly handle cl arguments
     let shader_path = PathBuf::from(std::env::args().nth(1).expect("shader path"));
