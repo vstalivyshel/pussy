@@ -11,6 +11,8 @@ use winit::{
     window::WindowBuilder,
 };
 
+// TODO: take a look at 'naga::front' for shader parsing
+
 async fn run(
     shader_source: PathBuf,
     rx: std::sync::mpsc::Receiver<notify::Result<notify::event::Event>>,

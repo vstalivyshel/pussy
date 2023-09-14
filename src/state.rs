@@ -35,7 +35,6 @@ impl State {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    // TODO: verify that the adapter supports the feature
                     features: wgpu::Features::default(),
                     limits: wgpu::Limits::default(),
                     label: None,
@@ -53,7 +52,6 @@ impl State {
             format: surface_format,
             width: size.width,
             height: size.height,
-            // TODO: verify that the adapter supports this
             present_mode: surface_caps.present_modes[0],
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
