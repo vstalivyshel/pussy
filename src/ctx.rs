@@ -1,26 +1,22 @@
-use crate::utils::{create_render_pipeline, load_shader_module};
+use crate::bind::*;
+use crate::util::{create_render_pipeline, load_shader_from_path};
 use std::path::PathBuf;
 use winit::{dpi::PhysicalSize, event::*, window::Window};
 
-pub struct State {
+pub struct WgpuContext {
     surface: wgpu::Surface,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
-    render_pipeline: wgpu::RenderPipeline,
+    pipeline_layout: wgpu::PipelineLayout,
+    pipeline: wgpu::RenderPipeline,
     shader_path: PathBuf,
-    shader_source: String,
+    bindings: ShaderBindings,
     window: Window,
 }
 
-impl Drop for State {
-    fn drop(&mut self) {
-        crate::utils::clear_screen();
-    }
-}
-
-impl State {
+impl WgpuContext {
     pub async fn new(window: Window, shader_path: PathBuf) -> Self {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
@@ -65,10 +61,17 @@ impl State {
         };
 
         surface.configure(&device, &config);
+        let bindings = ShaderBindings::new(&device);
 
         // TODO: handle error
-        let shader_source = load_shader_module(&shader_path).unwrap();
-        let render_pipeline = create_render_pipeline(&device, &shader_source, config.format);
+        let shader_source = load_shader_from_path(&shader_path).expect("loading shader source");
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[&bindings.create_bind_group_layout(&device)],
+            push_constant_ranges: &[],
+        });
+        let pipeline =
+            create_render_pipeline(&device, &pipeline_layout, &shader_source, config.format);
 
         Self {
             surface,
@@ -76,10 +79,11 @@ impl State {
             queue,
             config,
             size,
-            render_pipeline,
-            shader_path,
-            shader_source,
+            pipeline,
+            pipeline_layout,
             window,
+            shader_path,
+            bindings,
         }
     }
 
@@ -91,20 +95,24 @@ impl State {
         false
     }
 
-    pub fn update(&self) {}
+    pub fn update(&mut self, time: f32) {
+        // TODO: change this
+        self.bindings.time.data = Time(time);
+        self.bindings.stage(&self.queue);
+    }
 
     pub fn rebuild_shader(&mut self) {
-        crate::utils::clear_screen();
-        match load_shader_module(&self.shader_path) {
-            Ok(shader_src) => {
-                self.render_pipeline =
-                    create_render_pipeline(&self.device, &shader_src, self.config.format)
+        crate::util::clear_screen();
+        match load_shader_from_path(&self.shader_path) {
+            Ok(src) => {
+                self.pipeline = create_render_pipeline(
+                    &self.device,
+                    &self.pipeline_layout,
+                    &src,
+                    self.config.format,
+                )
             }
-            Err(parsing_error) => println!(
-                "{path:?} parsing {err}",
-                path = self.shader_path,
-                err = parsing_error.emit_to_string(&self.shader_source),
-            ),
+            Err(err) => println!("{err}"),
         }
     }
 
@@ -135,6 +143,11 @@ impl State {
                 label: Some("Render Encoder"),
             });
 
+        let bindings_bind_group_layout = self.bindings.create_bind_group_layout(&self.device);
+        let bindings_bind_group = self
+            .bindings
+            .create_bind_group(&self.device, &bindings_bind_group_layout);
+
         // block will borrow encoder (&mut self) and we need to drop borrowed variable
         // before calling submit() method
         {
@@ -147,7 +160,7 @@ impl State {
 
             let mut render_pass = cmd_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
-                // describe were to draw a color
+                //
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -159,7 +172,8 @@ impl State {
                 depth_stencil_attachment: None,
             });
 
-            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_bind_group(0, &bindings_bind_group, &[]);
+            render_pass.set_pipeline(&self.pipeline);
             render_pass.draw(0..3, 0..1);
         }
 
