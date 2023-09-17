@@ -16,9 +16,6 @@ use winit::{
 //      1. gpu::Queue::write_texture()
 //      2. `image` crate for encoding-decoding, you know, iamges
 
-// TODO: wgpu throws validation error in some cases, while naga parses successfully. why?
-//      example: 2.0 * 2  -> will throw validation error (expression is invalid) by wgpu not by naga
-
 async fn draw(shader_path: PathBuf) {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()

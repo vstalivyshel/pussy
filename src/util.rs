@@ -2,7 +2,7 @@ use crossterm::{
     cursor::MoveTo,
     terminal::{Clear, ClearType},
 };
-use naga::front::wgsl;
+use naga::{front::wgsl, valid};
 use std::{io::Write, path::Path};
 
 pub fn uniform_buffer_size<T>() -> u64 {
@@ -18,13 +18,12 @@ pub fn clear_screen() {
 
 pub fn load_shader_from_path(path: impl AsRef<Path>) -> Result<String, String> {
     let path = path.as_ref();
-    let source = std::fs::read_to_string(path).map_err(|e| format!("{path:?} read error: {e}"))?;
-    let _ = wgsl::parse_str(&source).map_err(|e| {
-        format!(
-            "{path:?} parsing error {err}",
-            err = e.emit_to_string(&source)
-        )
-    })?;
+    let source = std::fs::read_to_string(path).map_err(|e| format!("{path:?}: {e}"))?;
+    let module = wgsl::parse_str(&source)
+        .map_err(|e| format!("{path:?} parsing {err}", err = e.emit_to_string(&source)))?;
+    valid::Validator::new(valid::ValidationFlags::all(), valid::Capabilities::empty())
+        .validate(&module)
+        .map_err(|e| format!("{path:?} parsing {err}", err = e.emit_to_string(&source)))?;
 
     Ok(source)
 }
