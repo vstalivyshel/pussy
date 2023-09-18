@@ -1,7 +1,10 @@
 mod bind;
+mod capture;
 mod ctx;
+mod pp;
 mod util;
 
+use crate::bind::Time;
 use crate::ctx::WgpuContext;
 use notify::Watcher;
 use std::path::PathBuf;
@@ -12,18 +15,14 @@ use winit::{
     window::WindowBuilder,
 };
 
-// NOTE: Loading textures:
-//      1. gpu::Queue::write_texture()
-//      2. `image` crate for encoding-decoding, you know, iamges
-
 async fn draw(shader_path: PathBuf) {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
-        .with_title("pussy")
+        .with_title("puss")
         // TODO: make this optional
         .with_inner_size(PhysicalSize::new(800.0, 600.0))
         .build(&event_loop)
-        .expect("create window");
+        .expect("creating window");
     let start_time = std::time::Instant::now();
 
     let (tx, rx) = std::sync::mpsc::channel();
@@ -41,8 +40,8 @@ async fn draw(shader_path: PathBuf) {
 
         match ev {
             Event::MainEventsCleared => {
+                // TODO: handle errors and other events
                 while let Ok(Ok(event)) = rx.try_recv() {
-                    // TODO: handle errors and other events
                     if let notify::event::EventKind::Modify(_) = event.kind {
                         ctx.rebuild_shader();
                     }
@@ -53,7 +52,16 @@ async fn draw(shader_path: PathBuf) {
             Event::WindowEvent {
                 ref event,
                 window_id,
-            } if window_id == ctx.window().id() && !ctx.input(event) => match event {
+            } if window_id == ctx.window().id() => match event {
+                WindowEvent::KeyboardInput {
+                    input:
+                        KeyboardInput {
+                            state: ElementState::Pressed,
+                            virtual_keycode: Some(VirtualKeyCode::F5),
+                            ..
+                        },
+                    ..
+                } => crate::util::handle_render_result(ctx.capture_frame(), &mut ctx, cf),
                 WindowEvent::CloseRequested => *cf = ControlFlow::Exit,
                 WindowEvent::Resized(physical_size) => ctx.resize(*physical_size),
                 WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
@@ -62,15 +70,8 @@ async fn draw(shader_path: PathBuf) {
                 _ => {}
             },
             Event::RedrawRequested(window_id) if window_id == ctx.window().id() => {
-                ctx.update(start_time.elapsed().as_secs_f32());
-                match ctx.render() {
-                    Ok(_) => {}
-                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        ctx.resize(ctx.window().inner_size())
-                    }
-                    Err(wgpu::SurfaceError::OutOfMemory) => *cf = ControlFlow::Exit,
-                    Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
-                }
+                ctx.update_bindings(|b| b.time.data = Time(start_time.elapsed().as_secs_f32()));
+                crate::util::handle_render_result(ctx.render(), &mut ctx, cf);
             }
             Event::RedrawEventsCleared => ctx.window().request_redraw(),
             _ => {}

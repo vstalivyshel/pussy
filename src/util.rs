@@ -1,31 +1,30 @@
+use crate::ctx::{WgpuContext, FS_ENTRY, VS_ENTRY};
 use crossterm::{
     cursor::MoveTo,
     terminal::{Clear, ClearType},
 };
-use naga::{front::wgsl, valid};
-use std::{io::Write, path::Path};
+use std::io::Write;
+use winit::event_loop::ControlFlow;
 
-pub fn uniform_buffer_size<T>() -> u64 {
-    let size = std::mem::size_of::<T>() as u64;
-    size.div_ceil(16) * 16
+pub fn handle_render_result(
+    result: Result<(), wgpu::SurfaceError>,
+    ctx: &mut WgpuContext,
+    control_flow: &mut ControlFlow,
+) {
+    match result {
+        Ok(_) => {}
+        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            ctx.resize(ctx.window().inner_size())
+        }
+        Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
+        Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
+    }
 }
 
 pub fn clear_screen() {
     let mut stdout = std::io::stdout();
     let _ = crossterm::execute!(stdout, MoveTo(0, 0), Clear(ClearType::All));
     let _ = stdout.flush();
-}
-
-pub fn load_shader_from_path(path: impl AsRef<Path>) -> Result<String, String> {
-    let path = path.as_ref();
-    let source = std::fs::read_to_string(path).map_err(|e| format!("{path:?}: {e}"))?;
-    let module = wgsl::parse_str(&source)
-        .map_err(|e| format!("{path:?} parsing {err}", err = e.emit_to_string(&source)))?;
-    valid::Validator::new(valid::ValidationFlags::all(), valid::Capabilities::empty())
-        .validate(&module)
-        .map_err(|e| format!("{path:?} parsing {err}", err = e.emit_to_string(&source)))?;
-
-    Ok(source)
 }
 
 pub fn create_render_pipeline(
@@ -44,12 +43,12 @@ pub fn create_render_pipeline(
         layout: Some(pipeline_layout),
         vertex: wgpu::VertexState {
             module,
-            entry_point: "vs_main",
+            entry_point: VS_ENTRY,
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module,
-            entry_point: "fs_main",
+            entry_point: FS_ENTRY,
             targets: &[Some(wgpu::ColorTargetState {
                 format: texture_format,
                 blend: Some(wgpu::BlendState::REPLACE),

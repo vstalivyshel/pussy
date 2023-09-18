@@ -1,4 +1,3 @@
-use crate::util::uniform_buffer_size;
 // Thx to https://github.com/compute-toys/wgpu-compute-toy/blob/b0d8c41a1885e7a13d4882a1f02d5df26305ec6b/src/bind.rs#L39
 // for idea and overall understanting
 
@@ -6,6 +5,7 @@ trait Binding {
     fn bind(&self) -> wgpu::BindingResource;
     fn stage(&self, queue: &wgpu::Queue);
     fn binding_type(&self) -> &wgpu::BindingType;
+    fn as_wgsl_str(&self) -> &str;
 }
 
 #[repr(C)]
@@ -15,6 +15,7 @@ pub struct Time(pub f32);
 pub struct BufferBinding<T> {
     pub data: T,
     decl: String,
+    #[allow(clippy::type_complexity)]
     serialize: Box<dyn Fn(&T) -> Vec<u8>>,
     buffer: wgpu::Buffer,
     binding_type: wgpu::BindingType,
@@ -34,6 +35,10 @@ impl<T> Binding for BufferBinding<T> {
     fn binding_type(&self) -> &wgpu::BindingType {
         &self.binding_type
     }
+
+    fn as_wgsl_str(&self) -> &str {
+        &self.decl
+    }
 }
 
 pub struct ShaderBindings {
@@ -50,12 +55,12 @@ impl ShaderBindings {
 
         Self {
             time: BufferBinding {
-                decl: "var<uniform> time: Time".into(),
+                decl: "var<uniform> TIME: f32".into(),
                 data: Time(0.),
                 serialize: Box::new(|d| bytemuck::bytes_of(d).to_vec()),
                 buffer: device.create_buffer(&wgpu::BufferDescriptor {
                     label: None,
-                    size: uniform_buffer_size::<Time>(),
+                    size: std::mem::size_of::<Time>() as u64,
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }),
@@ -100,6 +105,21 @@ impl ShaderBindings {
                 })
                 .collect::<Vec<_>>(),
         })
+    }
+
+    pub fn as_wgsl_string(&self) -> String {
+        self.to_vec()
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let decl = b.as_wgsl_str();
+                if decl.is_empty() {
+                    String::new()
+                } else {
+                    format!("@group(0) @binding({i}) {decl};\n")
+                }
+            })
+            .collect()
     }
 
     pub fn stage(&self, queue: &wgpu::Queue) {
