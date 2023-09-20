@@ -1,4 +1,4 @@
-use crate::{bind::*, pp::ShaderSource, util::create_render_pipeline};
+use crate::{bind::*, pp::ShaderSource};
 use std::path::PathBuf;
 use winit::{dpi::PhysicalSize, window::Window};
 
@@ -10,7 +10,6 @@ pub struct WgpuContext {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    size: winit::dpi::PhysicalSize<u32>,
     pipeline_layout: wgpu::PipelineLayout,
     pipeline: wgpu::RenderPipeline,
     shader_path: PathBuf,
@@ -72,15 +71,18 @@ impl WgpuContext {
             bind_group_layouts: &[&bindings.create_bind_group_layout(&device)],
             push_constant_ranges: &[],
         });
-        let pipeline =
-            create_render_pipeline(&device, &pipeline_layout, &shader_source, config.format);
+        let pipeline = crate::util::create_render_pipeline(
+            &device,
+            &pipeline_layout,
+            &shader_source,
+            config.format,
+        );
 
         Self {
             surface,
             device,
             queue,
             config,
-            size,
             pipeline,
             pipeline_layout,
             window,
@@ -102,10 +104,10 @@ impl WgpuContext {
     }
 
     pub fn rebuild_shader(&mut self) {
-        crate::util::clear_screen();
+        // crate::util::clear_screen();
         match ShaderSource::validate(&self.shader_path, &self.bindings) {
             Ok(src) => {
-                self.pipeline = create_render_pipeline(
+                self.pipeline = crate::util::create_render_pipeline(
                     &self.device,
                     &self.pipeline_layout,
                     src.as_str(),
@@ -118,7 +120,6 @@ impl WgpuContext {
 
     pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
-            self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
@@ -151,96 +152,11 @@ impl WgpuContext {
         Ok(())
     }
 
-    pub fn capture_frame(&mut self) -> Result<(), wgpu::SurfaceError> {
-        // wgpu requires texture -> buffer copies to be aligned using
-        // wgpu::COPY_BYTES_PER_ROW_ALIGNMENT. Because of this we'll
-        // need to save both the padded_bytes_per_row as well as the
-        // unpadded_bytes_per_row
-        let bytes_per_pixel = std::mem::size_of::<u32>() as u32;
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let unpadded_bytes_per_row = self.size.width * bytes_per_pixel;
-        let padding = (align - unpadded_bytes_per_row % align) % align;
-        let padded_bytes_per_row = unpadded_bytes_per_row + padding;
-
-        // create a buffer to copy the texture so we can get the data
-        let buffer_size = (padded_bytes_per_row * self.size.height) as wgpu::BufferAddress;
-        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Texture Buffer"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let output = self.surface.get_current_texture()?;
-
-        // I need to create another texture with COPY_SRC texture usage and render to it,
-        // because texture created by the surface doesn't include the usage flag so wgpu will panic
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("TEMP texture"),
-            size: output.texture.size(),
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: output.texture.dimension(),
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-
-        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
-
-        self.render_frame(&mut encoder, &texture_view);
-
-        encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
-            wgpu::ImageCopyBuffer {
-                buffer: &output_buffer,
-                layout: wgpu::ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: None,
-                },
-            },
-            texture.size(),
-        );
-
-        self.queue.submit(Some(encoder.finish()));
-
-        // Create the map request
-        let buffer_slice = output_buffer.slice(..);
-        let (tx, rx) = futures_intrusive::channel::shared::oneshot_channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            tx.send(result).unwrap();
-        });
-
-        // wait for the GPU to finish
-        self.device.poll(wgpu::Maintain::Wait);
-        let result = pollster::block_on(rx.receive());
-
-        match result {
-            Some(Ok(())) => {
-                let padded_data = buffer_slice.get_mapped_range();
-                let image_data = padded_data
-                    .chunks(padded_bytes_per_row as _)
-                    .flat_map(|ch| &ch[..unpadded_bytes_per_row as _])
-                    .copied()
-                    .collect::<Vec<_>>();
-                drop(padded_data);
-                output_buffer.unmap();
-                crate::capture::save_png(&image_data, self.size.width, self.size.height);
-            }
-            _ => log::error!("Failed to save image"),
-        }
-
-        Ok(())
-    }
-
-    fn render_frame(&self, encoder: &mut wgpu::CommandEncoder, texture_view: &wgpu::TextureView) {
+    fn render_frame(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        texture_view: &wgpu::TextureView,
+    ) {
         let bindings_bind_group_layout = self.bindings.create_bind_group_layout(&self.device);
         let bindings_bind_group = self
             .bindings
@@ -269,5 +185,100 @@ impl WgpuContext {
         render_pass.draw(0..3, 0..1);
 
         drop(render_pass);
+    }
+
+    pub async fn capture_frame(&mut self) -> Vec<u8> {
+        // window size or surface size? is there any difference?
+        let size = self.window.inner_size();
+
+        // wgpu requires texture -> buffer copies to be aligned using
+        // wgpu::COPY_BYTES_PER_ROW_ALIGNMENT. Because of this we'll
+        // need to save both the padded_bytes_per_row as well as the
+        // unpadded_bytes_per_row
+        let bytes_per_pixel = std::mem::size_of::<u32>() as u32;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let unpadded_bytes_per_row = size.width * bytes_per_pixel;
+        let padding = (align - unpadded_bytes_per_row % align) % align;
+        let padded_bytes_per_row = unpadded_bytes_per_row + padding;
+
+        // create a buffer to copy the texture so we can get the data
+        let buffer_size = (padded_bytes_per_row * size.height) as wgpu::BufferAddress;
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Texture Buffer"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("TEMP texture"),
+            size: wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
+
+        self.render_frame(&mut encoder, &texture_view);
+
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::ImageCopyBuffer {
+                buffer: &output_buffer,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: None,
+                },
+            },
+            texture.size(),
+        );
+
+        let submission_idx = self.queue.submit(Some(encoder.finish()));
+
+        let buffer_slice = output_buffer.slice(..);
+        // Sets the buffer up for mapping, sending over the result of the mapping back to us when it is finished.
+        let (tx, rx) = futures_intrusive::channel::shared::oneshot_channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        // Poll the device in a blocking manner so that our future resolves.
+        // In an actual application, `device.poll(...)` should
+        // be called in an event loop or on another thread.
+        //
+        // We pass our submission index so we don't need to wait for any other possible submissions.
+        self.device
+            .poll(wgpu::Maintain::WaitForSubmissionIndex(submission_idx));
+        let _ = rx
+            .receive()
+            .await
+            // supposed to return OK(()) indicating that buffer mapping is finished
+            // otherwise will return BufferAsyncError
+            .expect("receiving good news from the gpu");
+
+        let padded_data = buffer_slice.get_mapped_range();
+        let frame_data = padded_data
+            .chunks(padded_bytes_per_row as _)
+            .flat_map(|ch| &ch[..unpadded_bytes_per_row as _])
+            .copied()
+            .collect::<Vec<_>>();
+        drop(padded_data);
+        output_buffer.unmap();
+
+        frame_data
     }
 }

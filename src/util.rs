@@ -1,25 +1,9 @@
-use crate::ctx::{WgpuContext, FS_ENTRY, VS_ENTRY};
+use crate::ctx::{FS_ENTRY, VS_ENTRY};
 use crossterm::{
     cursor::MoveTo,
     terminal::{Clear, ClearType},
 };
 use std::io::Write;
-use winit::event_loop::ControlFlow;
-
-pub fn handle_render_result(
-    result: Result<(), wgpu::SurfaceError>,
-    ctx: &mut WgpuContext,
-    control_flow: &mut ControlFlow,
-) {
-    match result {
-        Ok(_) => {}
-        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-            ctx.resize(ctx.window().inner_size())
-        }
-        Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-        Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
-    }
-}
 
 pub fn clear_screen() {
     let mut stdout = std::io::stdout();
