@@ -23,18 +23,19 @@ async fn draw(shader_path: PathBuf) {
         .with_inner_size(PhysicalSize::new(800.0, 600.0))
         .build(&event_loop)
         .expect("creating window");
-    let start_time = std::time::Instant::now();
 
+    // setup watcher for shader file
     let (tx, rx) = std::sync::mpsc::channel();
     let watcher_config =
         notify::Config::default().with_poll_interval(std::time::Duration::from_millis(500));
     let mut watcher = notify::RecommendedWatcher::new(tx, watcher_config).unwrap();
     watcher
         .watch(&shader_path, notify::RecursiveMode::NonRecursive)
-        .unwrap();
+        .expect("initialize watcher");
 
     let mut ctx = WgpuContext::new(window, shader_path).await;
 
+    let start_time = std::time::Instant::now();
     let mut capturing_frames = false;
     let mut frames_buffer = Vec::<Vec<u8>>::new();
 
@@ -62,10 +63,13 @@ async fn draw(shader_path: PathBuf) {
                         virtual_keycode: Some(VirtualKeyCode::F5),
                         ..
                     } => {
+                        log::info!("Capturing frame");
                         let size = ctx.window().inner_size();
                         let frame = pollster::block_on(ctx.capture_frame());
-                        crate::capture::save_png(&frame, size.width, size.height);
-                        log::info!(".png saved");
+                        match crate::capture::save_png(&frame, size.width, size.height) {
+                            Ok(()) => log::info!(".png saved"),
+                            Err(e) => log::error!("{e}"),
+                        }
                     }
                     KeyboardInput {
                         state: ElementState::Pressed,
@@ -80,17 +84,17 @@ async fn draw(shader_path: PathBuf) {
                         virtual_keycode: Some(VirtualKeyCode::F7),
                         ..
                     } => {
-                        if !capturing_frames {
+                        if !capturing_frames && !frames_buffer.is_empty() {
                             log::info!("Saving .gif");
-                            let size = ctx.window().inner_size();
-                            crate::capture::save_gif(
-                                frames_buffer.clone(),
-                                30,
-                                size.width,
-                                size.height,
-                            );
+                            let frames = frames_buffer.clone();
                             frames_buffer.clear();
-                            log::info!(".gif saved");
+                            let size = ctx.window().inner_size();
+                            std::thread::spawn(move || {
+                                match crate::capture::save_gif(frames, 1, size.width, size.height) {
+                                    Ok(()) => log::info!(".gif saved"),
+                                    Err(e) => log::error!("{e}"),
+                                }
+                            });
                         }
                     }
                     _ => {}
@@ -128,7 +132,7 @@ async fn draw(shader_path: PathBuf) {
 fn main() {
     env_logger::init();
     crate::util::clear_screen();
-    // TODO: properly handle cl arguments
-    let shader_path = PathBuf::from(std::env::args().nth(1).expect("shader path"));
-    pollster::block_on(draw(shader_path));
+    if let Some(shader) = std::env::args().nth(1) {
+        pollster::block_on(draw(PathBuf::from(shader)));
+    }
 }
