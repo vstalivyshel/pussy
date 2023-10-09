@@ -87,11 +87,8 @@ impl ShaderBindings {
         })
     }
 
-    pub fn create_bind_group(
-        &self,
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-    ) -> wgpu::BindGroup {
+    pub fn create_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
+        let layout = &self.create_bind_group_layout(device);
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout,
