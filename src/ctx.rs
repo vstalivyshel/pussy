@@ -145,7 +145,7 @@ impl WgpuContext {
         Ok(())
     }
 
-    pub async fn capture_and_send_raw_frame(&mut self, sender: FrameBufferSender) -> Vec<u8> {
+    pub async fn render_into_frame_buffer(&mut self) -> FrameBuffer {
         let bg = self.bindings.create_bind_group(&self.device);
         let texture = create_texture(&self.device, &self.size);
 
@@ -156,7 +156,6 @@ impl WgpuContext {
             &self.pipeline,
             &bg,
         )
-        .send_self(sender);
     }
 }
 
@@ -178,7 +177,7 @@ impl FrameBuffer {
         let texture_size = texture.size();
         let mut encoder = crate::ctx::create_encoder(device);
         let buffer_size = AllignedBufferSize::new(texture_size.width, texture_size.height);
-        let buffer = create_buffer(&self.device, buf_size.buffer_size as _);
+        let buffer = create_buffer(&device, buffer_size.buffer_size as _);
         crate::ctx::render_frame(&mut encoder, pipeline, bind_group, texture_view);
         crate::ctx::copy_texture_to_buffer(&mut encoder, texture, &buffer, &buffer_size);
         let submission_idx = queue.submit(Some(encoder.finish()));
@@ -186,6 +185,7 @@ impl FrameBuffer {
         Self { buffer, buffer_size, submission_idx }
     }
 
+    // TODO: send using this function not a sender
     pub fn send_self(self, sender: FrameBufferSender) {
         let buffer_slice = self.buffer.slice(..);
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {

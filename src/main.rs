@@ -4,8 +4,8 @@ mod ctx;
 mod pp;
 mod util;
 
-use crate::bind::Time;
-use crate::ctx::WgpuContext;
+use crate::{bind::Time, ctx::WgpuContext, util::Msg};
+
 use notify::Watcher;
 use std::{path::PathBuf, time};
 use winit::{
@@ -15,15 +15,10 @@ use winit::{
     window::WindowBuilder,
 };
 
-enum Msg {
-    ExtractData(ctate::ctx::FrameBuffer),
-    Encode,
-}
-
 async fn draw_headless(
     shader_path: PathBuf,
     number_of_frames: usize,
-    size: &winit::dpi::PhysicalSize<u32>,
+    resolution: &winit::dpi::PhysicalSize<u32>,
 ) -> Result<(), String> {
     let instance = wgpu::Instance::default();
     let init = crate::ctx::WgpuSetup::new(&instance, None).await;
@@ -41,40 +36,30 @@ async fn draw_headless(
         texture.format(),
     );
 
-    let mut frames = Vec::<crate::util::RawFrame>::new();
-
-    let start_time = time::Instant::now();
-    let mut frame_rate = 60.0;
-    let mut last_frame_inst = time::Instant::now();
-    let (mut frame_count, mut accum_time) = (0, 0.0);
+    let mut time = crate::util::TimeMeasure::new();
+    let channel = crate::util::Channel::new();
 
     for _ in 0..number_of_frames {
         let bg = bindings.create_bind_group(&init.device);
-        let frame = crate::ctx::FrameBuffer::new(
+        crate::ctx::FrameBuffer::new(
             &init.device,
             &init.queue,
             &texture,
             &pipeline,
             &bg,
-        );
-        frames.push(frame);
-        bindings.time.data = Time(start_time.elapsed().as_secs_f32());
-        bindings.stage(&init.queue);
+        ).send_self(&channel.sender);
 
-        // TODO: this must go to the separate function
-        accum_time += last_frame_inst.elapsed().as_secs_f32();
-        last_frame_inst = time::Instant::now();
-        frame_count += 1;
-        if frame_count == 10 {
-            frame_rate = frame_count as f32 / accum_time;
-            log::debug!("rate: {frame_rate}");
-            accum_time = 0.0;
-            frame_count = 0;
-        }
+        // TODO: do something with this shit
+        bindings.time.data = Time(time.start.elapsed().as_secs_f32());
+        bindings.stage(&init.queue);
+        //
+
+        time.update();
     }
 
-    crate::capture::save_raw_frames_as_mp4("headless_out.mp4", frames, size, frame_rate as _)
-        .unwrap();
+    channel.send(Msg::SaveMP4 { resolution, rate: time.delta });
+    channel.sender.close().unwrap();
+    channel.thread_handle.join().unwrap();
 
     Ok(())
 }
@@ -88,7 +73,6 @@ async fn draw(shader_path: PathBuf) {
         .build(&event_loop)
         .expect("creating window");
 
-    // setup watcher for shader file
     let (tx, rx) = std::sync::mpsc::channel();
     let watcher_config =
         notify::Config::default().with_poll_interval(std::time::Duration::from_millis(500));
@@ -98,24 +82,8 @@ async fn draw(shader_path: PathBuf) {
         .expect("initialize watcher");
 
     let mut ctx = WgpuContext::new(window, shader_path).await;
-
-    let start_time = time::Instant::now();
-
-    let (tx, rx) = futures_intrusive::channel::shared::oneshot_channel();
-
-    // TODO: finish this. it must accept msgs from main thread to process frames from buffers and encode it
-    //      do the same for the headless rendering
-
-    // TODO: remove other threads that are used for encoding
-    std::thread::spawn(move || {
-        let mut frames_buffer = Vec::<Vec<u8>>::new();
-        whyle let Some()
-    });
-
-    let mut capturing_frames = false;
-    let mut frame_rate = 60.0;
-    let mut last_frame_inst = time::Instant::now();
-    let (mut frame_count, mut accum_time) = (0, 0.0);
+    let mut time = crate::util::TimeMeasure::new();
+    let channel = crate::util::Channel::new();
 
     event_loop.run(move |ev, _, cf| {
         *cf = ControlFlow::Poll;
@@ -141,15 +109,11 @@ async fn draw(shader_path: PathBuf) {
                             state: ElementState::Pressed,
                             virtual_keycode: Some(VirtualKeyCode::F5),
                             ..
-                        } => {
-                            let frame = pollster::block_on(ctx.capture_raw_frame());
-                            let out = crate::util::current_time_string() + ".png";
-                            log::info!("Capturing frame into {out}");
-                            match crate::capture::save_raw_frame_as_png(&out, &frame, &ctx.size) {
-                                Ok(()) => log::info!(".png saved"),
-                                Err(e) => log::error!("{e}"),
-                            }
-                        }
+                        } => channel.send(Msg::SavePng {
+                            buffer: ctx.render_into_frame_buffer(),
+
+                        })
+                        
                         KeyboardInput {
                             state: ElementState::Pressed,
                             virtual_keycode: Some(VirtualKeyCode::F6),
@@ -215,12 +179,15 @@ async fn draw(shader_path: PathBuf) {
                 }
             }
             Event::RedrawRequested(window_id) if window_id == ctx.window.id() => {
-                ctx.bindings.time.data = Time(start_time.elapsed().as_secs_f32());
+                // TODO: do something with this shit
+                ctx.bindings.time.data = Time(time.start.elapsed().as_secs_f32());
                 ctx.bindings.stage(&ctx.queue);
+                //
+
+                time.update();
 
                 if capturing_frames {
-                    let frame = pollster::block_on(ctx.capture_raw_frame());
-                    frames_buffer.push(frame);
+                    ctx.render_into_frame_buffer().send_self(&channel.sender);
                 }
 
                 match ctx.render_frame() {
@@ -234,16 +201,6 @@ async fn draw(shader_path: PathBuf) {
                         *cf = ControlFlow::Exit;
                     }
                     Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
-                }
-                // TODO: a way to spawn thread which will record frames
-                accum_time += last_frame_inst.elapsed().as_secs_f32();
-                last_frame_inst = time::Instant::now();
-                frame_count += 1;
-                if frame_count == 100 {
-                    frame_rate = frame_count as f32 / accum_time;
-                    log::debug!("rate: {frame_rate}");
-                    accum_time = 0.0;
-                    frame_count = 0;
                 }
             }
             Event::RedrawEventsCleared => ctx.window.request_redraw(),

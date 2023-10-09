@@ -14,10 +14,11 @@ use std::{
 use winit::dpi::PhysicalSize;
 
 pub fn save_raw_frame_as_png(
-    out_name: &str,
     frame: &[u8],
     size: &PhysicalSize<u32>,
 ) -> anyhow::Result<()> {
+    let out_name = crate::util::current_time_string() + ".png";
+    log::info!("Saving png as {out_name}");
     let target_file = crate::util::create_file_cwd(out_name)
         .context("Failed to create file for saving raw buffer as png")?;
     PngEncoder::new(target_file)
@@ -26,10 +27,11 @@ pub fn save_raw_frame_as_png(
 }
 
 pub fn save_raw_frames_as_gif(
-    out_name: &str,
     frames: Vec<RawFrame>,
     size: &PhysicalSize<u32>,
 ) -> anyhow::Result<()> {
+    let out_name = crate::util::current_time_string() + ".gif";
+    log::info!("Saving gif as {out_name}");
     let target_file = crate::util::create_file_cwd(out_name)
         .context("Failed to create file for saving raw buffer as gif")?;
     let mut encoder = GifEncoder::new_with_speed(target_file, 10);
@@ -48,7 +50,9 @@ pub fn save_raw_frames_as_gif(
 }
 
 #[rustfmt::skip]
-pub fn save_raw_frames_as_mp4(out_name: &str, frames: Vec<RawFrame>, size: &PhysicalSize<u32>, rate: u32) -> anyhow::Result<()> {
+pub fn save_raw_frames_as_mp4(frames: Vec<RawFrame>, size: &PhysicalSize<u32>, rate: u32) -> anyhow::Result<()> {
+    let out_name = crate::util::current_time_string() + ".mp4";
+    log::info!("Saving video as {out_name}");
     let size = format!("{width}x{height}", width = size.width, height = size.height);
     let rate = format!("{rate}");
     let mut ffmpeg = Command::new("ffmpeg")
