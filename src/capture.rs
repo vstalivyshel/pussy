@@ -36,7 +36,6 @@ pub fn save_raw_frames_as_gif(
         .set_repeat(Repeat::Infinite)
         .context("GifEncoder::set_repeat(Repeat::Infinite) failed")?;
     let frames = frames.into_iter().map(|f| {
-        // TODO:
         let image_buffer = image::ImageBuffer::from_raw(size.width, size.height, f).unwrap();
         image::Frame::new(image_buffer)
     });

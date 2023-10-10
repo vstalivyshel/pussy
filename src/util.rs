@@ -76,6 +76,7 @@ impl Channel {
         }
     }
     pub fn send_msg(&self, msg: Msg) {
+        // TODO: make it less ugly
         match msg {
             Msg::ExtractData(buffer) => {
                 let buffer_slice = buffer.buffer.slice(..);

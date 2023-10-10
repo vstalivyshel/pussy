@@ -8,10 +8,6 @@ trait Binding {
     fn as_wgsl_str(&self) -> &str;
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Time(pub f32);
-
 pub struct BufferBinding<T> {
     pub data: T,
     decl: String,
@@ -42,7 +38,7 @@ impl<T> Binding for BufferBinding<T> {
 }
 
 pub struct ShaderBindings {
-    pub time: BufferBinding<Time>,
+    pub time: BufferBinding<f32>,
 }
 
 impl ShaderBindings {
@@ -56,11 +52,11 @@ impl ShaderBindings {
         Self {
             time: BufferBinding {
                 decl: "var<uniform> TIME: f32".into(),
-                data: Time(0.),
+                data: 0.,
                 serialize: Box::new(|d| bytemuck::bytes_of(d).to_vec()),
                 buffer: device.create_buffer(&wgpu::BufferDescriptor {
                     label: None,
-                    size: std::mem::size_of::<Time>() as u64,
+                    size: std::mem::size_of::<f32>() as u64,
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }),
@@ -68,6 +64,11 @@ impl ShaderBindings {
                 bind: Box::new(wgpu::Buffer::as_entire_buffer_binding),
             },
         }
+    }
+
+    pub fn update_time(&mut self, t: &crate::util::TimeMeasure, queue: &wgpu::Queue) {
+        self.time.data = t.start.elapsed().as_secs_f32();
+        self.time.stage(queue);
     }
 
     pub fn create_bind_group_layout(&self, device: &wgpu::Device) -> wgpu::BindGroupLayout {

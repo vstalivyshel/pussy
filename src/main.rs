@@ -4,7 +4,7 @@ mod ctx;
 mod pp;
 mod util;
 
-use crate::{bind::Time, ctx::WgpuContext, util::Msg};
+use crate::{ctx::WgpuContext, util::Msg};
 
 use notify::Watcher;
 use std::path::PathBuf;
@@ -49,11 +49,7 @@ async fn draw_headless(
             &bg,
         )));
 
-        // TODO: do something with this shit
-        bindings.time.data = Time(time.start.elapsed().as_secs_f32());
-        bindings.stage(&init.queue);
-        //
-
+        bindings.update_time(&time, &init.queue);
         time.update();
     }
 
@@ -153,11 +149,7 @@ async fn draw(shader_path: PathBuf) {
                 _ => {}
             },
             Event::RedrawRequested(window_id) if window_id == ctx.window.id() => {
-                // TODO: do something with this shit
-                ctx.bindings.time.data = Time(time.start.elapsed().as_secs_f32());
-                ctx.bindings.stage(&ctx.queue);
-                //
-
+                ctx.bindings.update_time(&time, &ctx.queue);
                 time.update();
 
                 if capturing_frames {

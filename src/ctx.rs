@@ -183,15 +183,18 @@ impl FrameBuffer {
         }
     }
 
-    pub fn extract_data(&self) -> RawFrame {
+    pub fn extract_data(self) -> RawFrame {
         let buffer_slice = self.buffer.slice(..);
         let padded_data = buffer_slice.get_mapped_range();
-
-        padded_data
+        let frame = padded_data
             .chunks(self.buffer_size.padded_bytes_per_row as _)
             .flat_map(|ch| &ch[..self.buffer_size.unpadded_bytes_per_row as _])
             .copied()
-            .collect::<RawFrame>()
+            .collect::<RawFrame>();
+        drop(padded_data);
+        self.buffer.unmap();
+
+        frame
     }
 }
 
