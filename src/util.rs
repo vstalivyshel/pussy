@@ -4,11 +4,11 @@ use crossterm::{
     cursor::MoveTo,
     terminal::{Clear, ClearType},
 };
-use std::{fs::File, io::Write, time::Instant};
+use std::{fs::File, io::Write, sync::mpsc, time::Instant};
 use winit::dpi::PhysicalSize;
 
 pub type RawFrame = Vec<u8>;
-pub type FrameBufferSender = futures_intrusive::channel::shared::OneshotSender<Result<wgpu::Buffer, wgpu::BufferAsyncError>>;
+pub type FrameBufferSender = mpsc::Sender<Result<Msg, wgpu::BufferAsyncError>>;
 
 pub enum Msg {
     ExtractData(crate::ctx::FrameBuffer),
@@ -22,60 +22,90 @@ pub enum Msg {
     },
     SaveGif {
         resolution: PhysicalSize<u32>,
-    }
+    },
 }
 
 pub struct Channel {
-    pub thread_handle: std::thread::JoinHandle<()>,
+    pub thread_handle: Option<std::thread::JoinHandle<()>>,
     pub sender: FrameBufferSender,
 }
 
 impl Channel {
     pub fn new() -> Self {
-        let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
+        let (sender, receiver) = mpsc::channel();
         let thread_handle = std::thread::spawn(move || {
             let mut frames = Vec::<crate::util::RawFrame>::new();
-            while let Some(msg) = receiver.recive() {
+            while let Ok(msg) = receiver.recv() {
                 match msg {
                     Ok(Msg::ExtractData(buffer)) => frames.push(buffer.extract_data()),
                     Ok(Msg::SavePng { buffer, resolution }) => {
-                        match crate::capture::save_raw_frame_as_png(buffer.extract_data(), resolution) {
+                        match crate::capture::save_raw_frame_as_png(
+                            &buffer.extract_data(),
+                            &resolution,
+                        ) {
                             Ok(()) => log::info!("png saved"),
                             Err(e) => log::error!("{e}"),
-                        },
+                        }
                     }
-                    Ok(Msg::SaveMp4 { resolution, rate, }) => {
-                        match crate::capture::save_raw_frames_as_mp4(frames.clone(), resolution, rate as _) {
-                            Ok(()) => log::info!("mp4 saved");
+                    Ok(Msg::SaveMp4 { resolution, rate }) => {
+                        match crate::capture::save_raw_frames_as_mp4(
+                            frames.clone(),
+                            &resolution,
+                            rate as _,
+                        ) {
+                            Ok(()) => log::info!("mp4 saved"),
                             Err(e) => log::error!("{e}"),
                         }
                         frames.clear();
-                    },
+                    }
                     Ok(Msg::SaveGif { resolution }) => {
-                        match crate::capture::save_raw_frames_as_gif(frames.clone(), resolution) {
-                            Ok(()) => log::info!("Gif saved");
+                        match crate::capture::save_raw_frames_as_gif(frames.clone(), &resolution) {
+                            Ok(()) => log::info!("Gif saved"),
                             Err(e) => log::error!("{e}"),
                         }
                         frames.clear();
-                    },
+                    }
                     Err(e) => log::error!("Error receiving message from main thread:\n\t{e}"),
                 }
             }
         });
 
         Self {
-            thread_handle,
+            thread_handle: Some(thread_handle),
             sender,
         }
     }
+    pub fn send_msg(&self, msg: Msg) {
+        match msg {
+            Msg::ExtractData(buffer) => {
+                let buffer_slice = buffer.buffer.slice(..);
+                let sender = self.sender.clone();
+                buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+                    sender
+                        .send(result.map(|_| Msg::ExtractData(buffer)))
+                        .unwrap();
+                });
+            }
+            Msg::SavePng { buffer, resolution } => {
+                let buffer_slice = buffer.buffer.slice(..);
+                let sender = self.sender.clone();
+                buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+                    sender
+                        .send(result.map(|_| Msg::SavePng { buffer, resolution }))
+                        .unwrap();
+                });
+            }
+            _ => self.sender.send(Ok(msg)).unwrap(),
+        }
+    }
 
-    pub fn send(msg: Msg) {
-        self.sender.send(msg).uwnrap();
+    pub fn finish(&mut self) {
+        self.thread_handle.take().unwrap().join().unwrap();
     }
 }
 
 pub struct TimeMeasure {
-    pub start: f32,
+    pub start: Instant,
     pub delta: f32,
     pub frame_count: u32,
     pub accum_time: f32,
@@ -85,7 +115,7 @@ pub struct TimeMeasure {
 impl TimeMeasure {
     pub fn new() -> Self {
         Self {
-            start: 0.0,
+            start: Instant::now(),
             delta: 0.0,
             frame_count: 0,
             accum_time: 0.0,
@@ -99,7 +129,7 @@ impl TimeMeasure {
         self.frame_count += 1;
         if self.frame_count == 10 {
             self.delta = self.frame_count as f32 / self.accum_time;
-            log::debug!("rate: {d}", r = self.delta);
+            log::debug!("rate: {r}", r = self.delta);
             self.accum_time = 0.0;
             self.frame_count = 0;
         }

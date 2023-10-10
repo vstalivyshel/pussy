@@ -1,7 +1,7 @@
 use crate::{
     bind::*,
     pp::ShaderSource,
-    util::{AllignedBufferSize, RawFrame, FrameBufferSender},
+    util::{AllignedBufferSize, RawFrame},
 };
 use std::path::PathBuf;
 use winit::{dpi::PhysicalSize, window::Window};
@@ -103,7 +103,7 @@ impl WgpuContext {
             bindings,
             output_buffer: None,
             output_texture: None,
-            size
+            size,
         }
     }
 
@@ -145,17 +145,11 @@ impl WgpuContext {
         Ok(())
     }
 
-    pub async fn render_into_frame_buffer(&mut self) -> FrameBuffer {
+    pub fn render_into_frame_buffer(&mut self) -> FrameBuffer {
         let bg = self.bindings.create_bind_group(&self.device);
         let texture = create_texture(&self.device, &self.size);
 
-        FrameBuffer::new(
-            &self.device,
-            &self.queue,
-            &texture,
-            &self.pipeline,
-            &bg,
-        )
+        FrameBuffer::new(&self.device, &self.queue, &texture, &self.pipeline, &bg)
     }
 }
 
@@ -178,19 +172,15 @@ impl FrameBuffer {
         let mut encoder = crate::ctx::create_encoder(device);
         let buffer_size = AllignedBufferSize::new(texture_size.width, texture_size.height);
         let buffer = create_buffer(&device, buffer_size.buffer_size as _);
-        crate::ctx::render_frame(&mut encoder, pipeline, bind_group, texture_view);
+        crate::ctx::render_frame(&mut encoder, pipeline, bind_group, &texture_view);
         crate::ctx::copy_texture_to_buffer(&mut encoder, texture, &buffer, &buffer_size);
         let submission_idx = queue.submit(Some(encoder.finish()));
 
-        Self { buffer, buffer_size, submission_idx }
-    }
-
-    // TODO: send using this function not a sender
-    pub fn send_self(self, sender: FrameBufferSender) {
-        let buffer_slice = self.buffer.slice(..);
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            sender.send(result.map(|_| self)).unwrap();
-        });
+        Self {
+            buffer,
+            buffer_size,
+            submission_idx,
+        }
     }
 
     pub fn extract_data(&self) -> RawFrame {
@@ -340,4 +330,3 @@ pub fn create_render_pipeline(
 pub fn create_encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
     device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
 }
-
