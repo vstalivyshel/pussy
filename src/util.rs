@@ -1,3 +1,4 @@
+use crate::ctx::FrameBuffer;
 use anyhow::Context;
 use chrono::offset::Local;
 use crossterm::{
@@ -8,12 +9,12 @@ use std::{fs::File, io::Write, sync::mpsc, time::Instant};
 use winit::dpi::PhysicalSize;
 
 pub type RawFrame = Vec<u8>;
-pub type FrameBufferSender = mpsc::Sender<Result<Msg, wgpu::BufferAsyncError>>;
 
 pub enum Msg {
-    ExtractData(crate::ctx::FrameBuffer),
+    Exit,
+    ExtractData(FrameBuffer),
     SavePng {
-        buffer: crate::ctx::FrameBuffer,
+        frame: FrameBuffer,
         resolution: PhysicalSize<u32>,
     },
     SaveMp4 {
@@ -25,83 +26,92 @@ pub enum Msg {
     },
 }
 
+impl std::fmt::Display for Msg {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Msg::Exit => "Msg::Exit",
+                Msg::ExtractData(_) => "Msg::ExtractData",
+                Msg::SavePng { .. } => "Msg::SavePng",
+                Msg::SaveMp4 { .. } => "Msg::SaveMp4",
+                Msg::SaveGif { .. } => "MSg::SaveGif",
+            }
+        )
+    }
+}
+
 pub struct Channel {
     pub thread_handle: Option<std::thread::JoinHandle<()>>,
-    pub sender: FrameBufferSender,
+    pub sender: mpsc::Sender<Msg>,
 }
 
 impl Channel {
     pub fn new() -> Self {
-        let (sender, receiver) = mpsc::channel();
+        let (tx, rx) = mpsc::channel();
         let thread_handle = std::thread::spawn(move || {
             let mut frames = Vec::<crate::util::RawFrame>::new();
-            while let Ok(msg) = receiver.recv() {
+
+            while let Ok(msg) = rx.recv() {
+                log::info!("Accepted request {msg}");
                 match msg {
-                    Ok(Msg::ExtractData(buffer)) => frames.push(buffer.extract_data()),
-                    Ok(Msg::SavePng { buffer, resolution }) => {
+                    Msg::Exit => break,
+                    Msg::ExtractData(frame_buffer) => {
+                        pollster::block_on(frame_buffer.map_read(None));
+                        frames.push(frame_buffer.extract_data());
+                    }
+                    Msg::SavePng { frame, resolution } => {
+                        pollster::block_on(frame.map_read(None));
                         match crate::capture::save_raw_frame_as_png(
-                            &buffer.extract_data(),
+                            &frame.extract_data(),
                             &resolution,
                         ) {
-                            Ok(()) => log::info!("png saved"),
+                            Ok(file) => log::info!("{file} saved"),
                             Err(e) => log::error!("{e}"),
                         }
                     }
-                    Ok(Msg::SaveMp4 { resolution, rate }) => {
+                    Msg::SaveMp4 { rate, resolution } => {
                         match crate::capture::save_raw_frames_as_mp4(
                             frames.clone(),
                             &resolution,
                             rate as _,
                         ) {
-                            Ok(()) => log::info!("mp4 saved"),
+                            Ok(file) => log::info!("{file} saved"),
                             Err(e) => log::error!("{e}"),
                         }
                         frames.clear();
                     }
-                    Ok(Msg::SaveGif { resolution }) => {
+                    Msg::SaveGif { resolution } => {
                         match crate::capture::save_raw_frames_as_gif(frames.clone(), &resolution) {
-                            Ok(()) => log::info!("Gif saved"),
+                            Ok(file) => log::info!("{file} saved"),
                             Err(e) => log::error!("{e}"),
                         }
                         frames.clear();
                     }
-                    Err(e) => log::error!("Error receiving message from main thread:\n\t{e}"),
                 }
             }
         });
 
         Self {
             thread_handle: Some(thread_handle),
-            sender,
+            sender: tx,
         }
     }
     pub fn send_msg(&self, msg: Msg) {
-        // TODO: make it less ugly
-        match msg {
-            Msg::ExtractData(buffer) => {
-                let buffer_slice = buffer.buffer.slice(..);
-                let sender = self.sender.clone();
-                buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-                    sender
-                        .send(result.map(|_| Msg::ExtractData(buffer)))
-                        .unwrap();
-                });
-            }
-            Msg::SavePng { buffer, resolution } => {
-                let buffer_slice = buffer.buffer.slice(..);
-                let sender = self.sender.clone();
-                buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-                    sender
-                        .send(result.map(|_| Msg::SavePng { buffer, resolution }))
-                        .unwrap();
-                });
-            }
-            _ => self.sender.send(Ok(msg)).unwrap(),
-        }
+        log::info!("Requested {msg}");
+        self.sender.send(msg).unwrap();
     }
 
     pub fn finish(&mut self) {
+        self.send_msg(Msg::Exit);
         self.thread_handle.take().unwrap().join().unwrap();
+    }
+}
+
+impl Drop for Channel {
+    fn drop(&mut self) {
+        self.finish();
     }
 }
 
@@ -139,6 +149,8 @@ impl TimeMeasure {
 
 #[derive(Clone, Copy)]
 pub struct AllignedBufferSize {
+    pub width: u32,
+    pub height: u32,
     pub buffer_size: u32,
     pub padded_bytes_per_row: u32,
     pub unpadded_bytes_per_row: u32,
@@ -154,6 +166,8 @@ impl AllignedBufferSize {
         let buffer_size = padded_bytes_per_row * height;
 
         Self {
+            width,
+            height,
             buffer_size,
             padded_bytes_per_row,
             unpadded_bytes_per_row,

@@ -13,20 +13,28 @@ use std::{
 };
 use winit::dpi::PhysicalSize;
 
-pub fn save_raw_frame_as_png(frame: &[u8], size: &PhysicalSize<u32>) -> anyhow::Result<()> {
+pub fn save_raw_frame_as_png(frame: &[u8], size: &PhysicalSize<u32>) -> anyhow::Result<String> {
+    if frame.is_empty() {
+        return Err(anyhow::Error::msg("Data for PNG encoding is not provided"));
+    }
     let out_name = crate::util::current_time_string() + ".png";
     log::info!("Saving png as {out_name}");
     let target_file = crate::util::create_file_cwd(&out_name)
         .context("Failed to create file for saving raw buffer as png")?;
     PngEncoder::new(target_file)
         .write_image(frame, size.width, size.height, image::ColorType::Rgba8)
-        .context("Failed to save raw frame as png")
+        .context("Failed to save raw frame as png")?;
+
+    Ok(out_name)
 }
 
 pub fn save_raw_frames_as_gif(
     frames: Vec<RawFrame>,
     size: &PhysicalSize<u32>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
+    if frames.is_empty() {
+        return Err(anyhow::Error::msg("Data for GIF encoding is not provided"));
+    }
     let out_name = crate::util::current_time_string() + ".gif";
     log::info!("Saving gif as {out_name}");
     let target_file = crate::util::create_file_cwd(&out_name)
@@ -42,11 +50,16 @@ pub fn save_raw_frames_as_gif(
 
     encoder
         .encode_frames(frames)
-        .context("Failed to save raw frames as gif")
+        .context("Failed to save raw frames as gif")?;
+
+    Ok(out_name)
 }
 
 #[rustfmt::skip]
-pub fn save_raw_frames_as_mp4(frames: Vec<RawFrame>, size: &PhysicalSize<u32>, rate: u32) -> anyhow::Result<()> {
+pub fn save_raw_frames_as_mp4(frames: Vec<RawFrame>, size: &PhysicalSize<u32>, rate: u32) -> anyhow::Result<String> {
+    if frames.is_empty() {
+        return Err(anyhow::Error::msg("Data for MP4 encoding is not provided"));
+    }
     let out_name = crate::util::current_time_string() + ".mp4";
     log::info!("Saving video as {out_name}");
     let size = format!("{width}x{height}", width = size.width, height = size.height);
@@ -80,5 +93,5 @@ pub fn save_raw_frames_as_mp4(frames: Vec<RawFrame>, size: &PhysicalSize<u32>, r
     stdin.write_all(&frames)?;
     let _ = ffmpeg.wait_with_output()?;
 
-    Ok(())
+    Ok(out_name)
 }

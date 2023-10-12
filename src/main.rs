@@ -14,6 +14,9 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
+// TODO: my pc will crash after capturing, encoding and running video? why? wtf. check journalctl
+// TODO: in headless mode can't join spawned thread and quit the program. it hangs. what about non-headless?
+// TODO: headless rendering doesn't work. hangs while waiting for mapping callback
 
 async fn draw_headless(
     shader_path: PathBuf,
@@ -37,27 +40,24 @@ async fn draw_headless(
     );
 
     let mut time = crate::util::TimeMeasure::new();
-    let mut channel = crate::util::Channel::new();
+    let mut frames = Vec::<crate::util::RawFrame>::new();
 
     for _ in 0..number_of_frames {
         let bg = bindings.create_bind_group(&init.device);
-        channel.send_msg(Msg::ExtractData(crate::ctx::FrameBuffer::new(
-            &init.device,
-            &init.queue,
-            &texture,
-            &pipeline,
-            &bg,
-        )));
+        let buffer =
+            crate::ctx::FrameBuffer::new(&init.device, &init.queue, &texture, &pipeline, &bg);
+
+        pollster::block_on(buffer.map_read(Some(&init.device)));
+        frames.push(buffer.extract_data());
 
         bindings.update_time(&time, &init.queue);
         time.update();
     }
 
-    channel.send_msg(Msg::SaveMp4 {
-        resolution,
-        rate: time.delta as _,
-    });
-    channel.finish();
+    match crate::capture::save_raw_frames_as_mp4(frames, &resolution, time.delta as _) {
+        Ok(file) => log::info!("{file} saved"),
+        Err(e) => log::error!("{e}"),
+    }
 
     Ok(())
 }
@@ -108,10 +108,9 @@ async fn draw(shader_path: PathBuf) {
                         virtual_keycode: Some(VirtualKeyCode::F5),
                         ..
                     } => channel.send_msg(Msg::SavePng {
-                        buffer: ctx.render_into_frame_buffer(),
+                        frame: ctx.render_into_frame_buffer(),
                         resolution: ctx.size,
                     }),
-
                     KeyboardInput {
                         state: ElementState::Pressed,
                         virtual_keycode: Some(VirtualKeyCode::F6),

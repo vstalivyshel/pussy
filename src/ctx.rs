@@ -52,12 +52,12 @@ pub struct WgpuContext {
     pub queue: wgpu::Queue,
     pub output_buffer: Option<wgpu::Buffer>,
     pub output_texture: Option<wgpu::Texture>,
-    device: wgpu::Device,
+    pub device: wgpu::Device,
+    pub size: PhysicalSize<u32>,
     pipeline: wgpu::RenderPipeline,
     config: wgpu::SurfaceConfiguration,
     surface: wgpu::Surface,
     shader_path: PathBuf,
-    pub size: PhysicalSize<u32>,
 }
 
 impl WgpuContext {
@@ -141,6 +141,7 @@ impl WgpuContext {
         render_frame(&mut encoder, &self.pipeline, &bg, &texture_view);
 
         self.queue.submit(Some(encoder.finish()));
+        output.present();
 
         Ok(())
     }
@@ -171,7 +172,7 @@ impl FrameBuffer {
         let texture_size = texture.size();
         let mut encoder = crate::ctx::create_encoder(device);
         let buffer_size = AllignedBufferSize::new(texture_size.width, texture_size.height);
-        let buffer = create_buffer(&device, buffer_size.buffer_size as _);
+        let buffer = create_buffer(device, buffer_size.buffer_size as _);
         crate::ctx::render_frame(&mut encoder, pipeline, bind_group, &texture_view);
         crate::ctx::copy_texture_to_buffer(&mut encoder, texture, &buffer, &buffer_size);
         let submission_idx = queue.submit(Some(encoder.finish()));
@@ -180,6 +181,20 @@ impl FrameBuffer {
             buffer,
             buffer_size,
             submission_idx,
+        }
+    }
+
+    pub async fn map_read(&self, device: Option<&wgpu::Device>) {
+        let buffer_slice = self.buffer.slice(..);
+        let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            sender.send(result).unwrap();
+        });
+        receiver.receive().await.unwrap().unwrap();
+        if let Some(d) = device {
+            d.poll(wgpu::Maintain::WaitForSubmissionIndex(
+                self.submission_idx.clone(),
+            ));
         }
     }
 
@@ -320,7 +335,6 @@ pub fn create_render_pipeline(
         depth_stencil: None,
         multisample: wgpu::MultisampleState {
             count: 1,
-            // tell to use all of the samples to be active (only one in this case)
             mask: !0,
             // related to anit-aliasing
             alpha_to_coverage_enabled: false,

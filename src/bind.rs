@@ -120,7 +120,7 @@ impl ShaderBindings {
             .collect()
     }
 
-    pub fn stage(&self, queue: &wgpu::Queue) {
+    pub fn _stage(&self, queue: &wgpu::Queue) {
         self.time.stage(queue);
     }
 

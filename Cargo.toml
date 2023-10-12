@@ -15,5 +15,5 @@ log = "0.4.20"
 naga = { version = "0.13.0", features = [ "validate" ] }
 notify = "6.1.1"
 pollster = "0.3.0"
-wgpu = { version = "0.17.0", features = [ "glsl" ] }
+wgpu = { version = "0.17.0", features = [ "glsl", "expose-ids" ] }
 winit = "0.28.6"
