@@ -1,6 +1,5 @@
 ### WIP
 [GlslViewer](https://github.com/patriciogonzalezvivo/glslViewer) clone.  
-$300, and I'll change the name.
 
 ### Progress:
 - [X] Hot reloading and syntax error reporting (to stdout).
@@ -20,3 +19,10 @@ $300, and I'll change the name.
 - [ShaderToy](https://www.shadertoy.com/)
 - [Code sample. Thx](https://github.com/compute-toys/wgpu-compute-toy)
 - [Code sample. Thx](https://github.com/adamnemecek/shadertoy)
+
+#### What with the name?
+Funny compiler output:
+```
+    Checking pussy v0.1.0 (..)
+    Finished dev [unoptimized + debuginfo] target(s) in 29.21s
+```
