@@ -141,6 +141,7 @@ impl WgpuContext {
         render_frame(&mut encoder, &self.pipeline, &bg, &texture_view);
 
         self.queue.submit(Some(encoder.finish()));
+        // without this surface will not be updated
         output.present();
 
         Ok(())
@@ -170,11 +171,11 @@ impl FrameBuffer {
     ) -> Self {
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let texture_size = texture.size();
-        let mut encoder = crate::ctx::create_encoder(device);
+        let mut encoder = create_encoder(device);
         let buffer_size = AllignedBufferSize::new(texture_size.width, texture_size.height);
         let buffer = create_buffer(device, buffer_size.buffer_size as _);
-        crate::ctx::render_frame(&mut encoder, pipeline, bind_group, &texture_view);
-        crate::ctx::copy_texture_to_buffer(&mut encoder, texture, &buffer, &buffer_size);
+        render_frame(&mut encoder, pipeline, bind_group, &texture_view);
+        copy_texture_to_buffer(&mut encoder, texture, &buffer, &buffer_size);
         let submission_idx = queue.submit(Some(encoder.finish()));
 
         Self {
@@ -184,18 +185,13 @@ impl FrameBuffer {
         }
     }
 
-    pub async fn map_read(&self, device: Option<&wgpu::Device>) {
+    pub async fn map_read(&self) {
         let buffer_slice = self.buffer.slice(..);
-        let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             sender.send(result).unwrap();
         });
-        receiver.receive().await.unwrap().unwrap();
-        if let Some(d) = device {
-            d.poll(wgpu::Maintain::WaitForSubmissionIndex(
-                self.submission_idx.clone(),
-            ));
-        }
+        receiver.await.unwrap().unwrap();
     }
 
     pub fn extract_data(self) -> RawFrame {

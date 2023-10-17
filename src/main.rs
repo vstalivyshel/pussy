@@ -5,83 +5,26 @@ mod pp;
 mod util;
 
 use crate::{ctx::WgpuContext, util::Msg};
-
-use notify::Watcher;
-use std::path::PathBuf;
 use winit::{
-    dpi::PhysicalSize,
     event::*,
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
-// TODO: my pc will crash after capturing, encoding and running video? why? wtf. check journalctl
-// TODO: in headless mode can't join spawned thread and quit the program. it hangs. what about non-headless?
-// TODO: headless rendering doesn't work. hangs while waiting for mapping callback
 
-async fn draw_headless(
-    shader_path: PathBuf,
-    number_of_frames: usize,
-    resolution: winit::dpi::PhysicalSize<u32>,
-) -> Result<(), String> {
-    let instance = wgpu::Instance::default();
-    let init = crate::ctx::WgpuSetup::new(&instance, None).await;
-
-    let mut bindings = crate::bind::ShaderBindings::new(&init.device);
-    let shader_src = crate::pp::ShaderSource::validate(&shader_path, &bindings)?;
-
-    let texture = crate::ctx::create_texture(&init.device, &resolution);
-
-    let bgl = bindings.create_bind_group_layout(&init.device);
-    let pipeline = crate::ctx::create_render_pipeline(
-        &init.device,
-        &bgl,
-        shader_src.as_str(),
-        texture.format(),
-    );
-
-    let mut time = crate::util::TimeMeasure::new();
-    let mut frames = Vec::<crate::util::RawFrame>::new();
-
-    for _ in 0..number_of_frames {
-        let bg = bindings.create_bind_group(&init.device);
-        let buffer =
-            crate::ctx::FrameBuffer::new(&init.device, &init.queue, &texture, &pipeline, &bg);
-
-        pollster::block_on(buffer.map_read(Some(&init.device)));
-        frames.push(buffer.extract_data());
-
-        bindings.update_time(&time, &init.queue);
-        time.update();
-    }
-
-    match crate::capture::save_raw_frames_as_mp4(frames, &resolution, time.delta as _) {
-        Ok(file) => log::info!("{file} saved"),
-        Err(e) => log::error!("{e}"),
-    }
-
-    Ok(())
-}
-
-async fn draw(shader_path: PathBuf) {
+async fn draw(shader_path: &str) {
+    let shader_path = std::path::PathBuf::from(shader_path);
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("puss")
-        // TODO: make this optional
-        .with_inner_size(PhysicalSize::new(800.0, 600.0))
         .build(&event_loop)
-        .expect("creating window");
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    let watcher_config =
-        notify::Config::default().with_poll_interval(std::time::Duration::from_millis(500));
-    let mut watcher = notify::RecommendedWatcher::new(tx, watcher_config).unwrap();
-    watcher
-        .watch(&shader_path, notify::RecursiveMode::NonRecursive)
-        .expect("initialize watcher");
-
+        .expect("create window");
+    let file_watcher = match crate::util::FileWatcher::new(&shader_path) {
+        Ok(watcher) => watcher,
+        Err(e) => return eprintln!("{e}"),
+    };
+    let channel = crate::util::Channel::new();
     let mut ctx = WgpuContext::new(window, shader_path).await;
-    let mut time = crate::util::TimeMeasure::new();
-    let mut channel = crate::util::Channel::new();
+    let mut time = crate::util::Time::new();
     let mut capturing_frames = false;
 
     event_loop.run(move |ev, _, cf| {
@@ -90,12 +33,11 @@ async fn draw(shader_path: PathBuf) {
         match ev {
             Event::MainEventsCleared => {
                 // TODO: handle errors and other events
-                while let Ok(Ok(event)) = rx.try_recv() {
+                while let Ok(Ok(event)) = file_watcher.receiver.try_recv() {
                     if let notify::event::EventKind::Modify(_) = event.kind {
                         ctx.rebuild_shader()
                     }
                 }
-
                 ctx.window.request_redraw();
             }
             Event::WindowEvent {
@@ -103,6 +45,11 @@ async fn draw(shader_path: PathBuf) {
                 window_id,
             } if window_id == ctx.window.id() => match event {
                 WindowEvent::KeyboardInput { input, .. } => match input {
+                    KeyboardInput {
+                        state: ElementState::Pressed,
+                        virtual_keycode: Some(VirtualKeyCode::Q),
+                        ..
+                    } => *cf = ControlFlow::ExitWithCode(0),
                     KeyboardInput {
                         state: ElementState::Pressed,
                         virtual_keycode: Some(VirtualKeyCode::F5),
@@ -127,20 +74,16 @@ async fn draw(shader_path: PathBuf) {
                         state: ElementState::Pressed,
                         virtual_keycode: Some(VirtualKeyCode::F7),
                         ..
-                    } if !capturing_frames => channel.send_msg(Msg::SaveGif {
-                        resolution: ctx.size,
-                    }),
-                    KeyboardInput {
-                        state: ElementState::Pressed,
-                        virtual_keycode: Some(VirtualKeyCode::F8),
-                        ..
                     } if !capturing_frames => channel.send_msg(Msg::SaveMp4 {
                         rate: time.delta as _,
                         resolution: ctx.size,
                     }),
                     _ => {}
                 },
-                WindowEvent::CloseRequested => *cf = ControlFlow::Exit,
+                WindowEvent::CloseRequested => {
+                    log::info!("Forced shutdown");
+                    std::process::exit(0);
+                }
                 WindowEvent::Resized(physical_size) => ctx.resize(physical_size),
                 WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                     ctx.resize(new_inner_size)
@@ -169,26 +112,22 @@ async fn draw(shader_path: PathBuf) {
                 }
             }
             Event::RedrawEventsCleared => ctx.window.request_redraw(),
-            Event::LoopDestroyed => channel.finish(),
             _ => {}
         }
     })
 }
 
 fn main() {
-    env_logger::init();
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
-    if args.len() > 1 {
-        let path = args.get(1).unwrap();
-        pollster::block_on(draw_headless(
-            PathBuf::from(path),
-            120,
-            PhysicalSize::new(300, 300),
-        ))
-        .unwrap();
-    } else {
-        crate::util::clear_screen();
-        let path = args.first().unwrap();
-        pollster::block_on(draw(PathBuf::from(path)));
-    }
+    tokio::runtime::Builder::new_multi_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            env_logger::init();
+            crate::util::clear_screen();
+            if let Some(shader) = std::env::args().nth(1) {
+                draw(&shader).await;
+            } else {
+                eprintln!("Shader path was not specifyed");
+            }
+        })
 }

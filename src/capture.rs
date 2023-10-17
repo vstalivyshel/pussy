@@ -1,12 +1,6 @@
 use crate::util::RawFrame;
 use anyhow::Context;
-use image::{
-    codecs::{
-        gif::{GifEncoder, Repeat},
-        png::PngEncoder,
-    },
-    ImageEncoder,
-};
+use image::{codecs::png::PngEncoder, ImageEncoder};
 use std::{
     io::Write,
     process::{Command, Stdio},
@@ -28,35 +22,12 @@ pub fn save_raw_frame_as_png(frame: &[u8], size: &PhysicalSize<u32>) -> anyhow::
     Ok(out_name)
 }
 
-pub fn save_raw_frames_as_gif(
+#[rustfmt::skip]
+pub fn save_raw_frames_as_mp4(
     frames: Vec<RawFrame>,
     size: &PhysicalSize<u32>,
+    rate: u32
 ) -> anyhow::Result<String> {
-    if frames.is_empty() {
-        return Err(anyhow::Error::msg("Data for GIF encoding is not provided"));
-    }
-    let out_name = crate::util::current_time_string() + ".gif";
-    log::info!("Saving gif as {out_name}");
-    let target_file = crate::util::create_file_cwd(&out_name)
-        .context("Failed to create file for saving raw buffer as gif")?;
-    let mut encoder = GifEncoder::new_with_speed(target_file, 10);
-    encoder
-        .set_repeat(Repeat::Infinite)
-        .context("GifEncoder::set_repeat(Repeat::Infinite) failed")?;
-    let frames = frames.into_iter().map(|f| {
-        let image_buffer = image::ImageBuffer::from_raw(size.width, size.height, f).unwrap();
-        image::Frame::new(image_buffer)
-    });
-
-    encoder
-        .encode_frames(frames)
-        .context("Failed to save raw frames as gif")?;
-
-    Ok(out_name)
-}
-
-#[rustfmt::skip]
-pub fn save_raw_frames_as_mp4(frames: Vec<RawFrame>, size: &PhysicalSize<u32>, rate: u32) -> anyhow::Result<String> {
     if frames.is_empty() {
         return Err(anyhow::Error::msg("Data for MP4 encoding is not provided"));
     }

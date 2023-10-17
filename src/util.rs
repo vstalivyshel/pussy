@@ -5,10 +5,32 @@ use crossterm::{
     cursor::MoveTo,
     terminal::{Clear, ClearType},
 };
+use notify::Watcher;
 use std::{fs::File, io::Write, sync::mpsc, time::Instant};
 use winit::dpi::PhysicalSize;
 
 pub type RawFrame = Vec<u8>;
+
+#[allow(dead_code)]
+pub struct FileWatcher {
+    pub receiver: mpsc::Receiver<notify::Result<notify::Event>>,
+    watcher: notify::RecommendedWatcher,
+}
+
+impl FileWatcher {
+    pub fn new(file: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let watcher_config =
+            notify::Config::default().with_poll_interval(std::time::Duration::from_millis(500));
+        let mut watcher = notify::RecommendedWatcher::new(sender, watcher_config)
+            .context("Failed to init file watcher")?;
+        watcher
+            .watch(file.as_ref(), notify::RecursiveMode::NonRecursive)
+            .context("Failed to spawn a file watcher")?;
+
+        Ok(Self { receiver, watcher })
+    }
+}
 
 pub enum Msg {
     Exit,
@@ -19,9 +41,6 @@ pub enum Msg {
     },
     SaveMp4 {
         rate: u32,
-        resolution: PhysicalSize<u32>,
-    },
-    SaveGif {
         resolution: PhysicalSize<u32>,
     },
 }
@@ -36,13 +55,14 @@ impl std::fmt::Display for Msg {
                 Msg::ExtractData(_) => "Msg::ExtractData",
                 Msg::SavePng { .. } => "Msg::SavePng",
                 Msg::SaveMp4 { .. } => "Msg::SaveMp4",
-                Msg::SaveGif { .. } => "MSg::SaveGif",
             }
         )
     }
 }
 
 pub struct Channel {
+    // wrapping a JoinHandle in Option becouse of weird
+    // behaviour of ownership inside of the EventLoop
     pub thread_handle: Option<std::thread::JoinHandle<()>>,
     pub sender: mpsc::Sender<Msg>,
 }
@@ -50,44 +70,73 @@ pub struct Channel {
 impl Channel {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel();
+        let rt_handle = tokio::runtime::Handle::current();
         let thread_handle = std::thread::spawn(move || {
-            let mut frames = Vec::<crate::util::RawFrame>::new();
+            let _ = rt_handle.enter();
+            // without wrapping it into Option the tokio runtime will panic
+            // with the "JoinHandle polled after completion" message on Msg::SaveMp4 request
+            let mut tasks = Some(Vec::<tokio::task::JoinHandle<RawFrame>>::new());
 
             while let Ok(msg) = rx.recv() {
                 log::info!("Accepted request {msg}");
                 match msg {
                     Msg::Exit => break,
                     Msg::ExtractData(frame_buffer) => {
-                        pollster::block_on(frame_buffer.map_read(None));
-                        frames.push(frame_buffer.extract_data());
+                        if let Some(ref mut ts) = tasks {
+                            ts.push(rt_handle.spawn(async move {
+                                frame_buffer.map_read().await;
+                                let frame = frame_buffer.extract_data();
+                                log::info!("Frame data is extracted");
+                                frame
+                            }));
+                        }
                     }
                     Msg::SavePng { frame, resolution } => {
-                        pollster::block_on(frame.map_read(None));
-                        match crate::capture::save_raw_frame_as_png(
-                            &frame.extract_data(),
-                            &resolution,
-                        ) {
-                            Ok(file) => log::info!("{file} saved"),
-                            Err(e) => log::error!("{e}"),
-                        }
+                        rt_handle.spawn(async move {
+                            frame.map_read().await;
+                            match crate::capture::save_raw_frame_as_png(
+                                &frame.extract_data(),
+                                &resolution,
+                            ) {
+                                Ok(file) => log::info!("{file} saved!"),
+                                Err(e) => log::error!("{e}"),
+                            }
+                        });
                     }
                     Msg::SaveMp4 { rate, resolution } => {
-                        match crate::capture::save_raw_frames_as_mp4(
-                            frames.clone(),
-                            &resolution,
-                            rate as _,
-                        ) {
-                            Ok(file) => log::info!("{file} saved"),
-                            Err(e) => log::error!("{e}"),
-                        }
-                        frames.clear();
-                    }
-                    Msg::SaveGif { resolution } => {
-                        match crate::capture::save_raw_frames_as_gif(frames.clone(), &resolution) {
-                            Ok(file) => log::info!("{file} saved"),
-                            Err(e) => log::error!("{e}"),
-                        }
-                        frames.clear();
+                        let frames = rt_handle.block_on(async {
+                            let tasks = tasks.take().unwrap();
+                            let n_tasks = tasks.len();
+                            let mut frames = Vec::<RawFrame>::with_capacity(n_tasks);
+                            for frame in tasks.into_iter() {
+                                match frame.await {
+                                    Ok(f) => frames.push(f),
+                                    Err(e) => log::error!(
+                                        "Error extracting data from a frame buffer: {e}"
+                                    ),
+                                }
+                            }
+                            log::info!(
+                                "{n_frames}/{n_tasks} frames are extracted",
+                                n_frames = frames.len(),
+                            );
+
+                            frames
+                        });
+
+                        // clear the tasks pool
+                        tasks = Some(Vec::new());
+
+                        rt_handle.spawn(async move {
+                            match crate::capture::save_raw_frames_as_mp4(
+                                frames,
+                                &resolution,
+                                rate as _,
+                            ) {
+                                Ok(file) => log::info!("{file} saved!"),
+                                Err(e) => log::error!("{e}"),
+                            }
+                        });
                     }
                 }
             }
@@ -98,24 +147,31 @@ impl Channel {
             sender: tx,
         }
     }
+
     pub fn send_msg(&self, msg: Msg) {
         log::info!("Requested {msg}");
-        self.sender.send(msg).unwrap();
-    }
-
-    pub fn finish(&mut self) {
-        self.send_msg(Msg::Exit);
-        self.thread_handle.take().unwrap().join().unwrap();
+        if let Err(m) = self.sender.send(msg) {
+            if let Msg::Exit = m.0 {
+                log::warn!("Channel is closed, forcing shutdown");
+                std::process::exit(1);
+            } else {
+                log::error!("Channel is closed, {m} wasn't accepted", m = m.0);
+            }
+        }
     }
 }
 
 impl Drop for Channel {
     fn drop(&mut self) {
-        self.finish();
+        log::info!("Dropping Channel");
+        self.send_msg(Msg::Exit);
+        if let Err(e) = self.thread_handle.take().unwrap().join() {
+            log::warn!("Channel's thread wasn't closed successfully: {e:?}")
+        }
     }
 }
 
-pub struct TimeMeasure {
+pub struct Time {
     pub start: Instant,
     pub delta: f32,
     pub frame_count: u32,
@@ -123,7 +179,7 @@ pub struct TimeMeasure {
     pub last_frame_inst: Instant,
 }
 
-impl TimeMeasure {
+impl Time {
     pub fn new() -> Self {
         Self {
             start: Instant::now(),
@@ -194,7 +250,6 @@ pub fn clear_screen() {
 pub fn create_file_cwd(file_name: &str) -> anyhow::Result<File> {
     let mut target = std::env::current_dir().context("Failed to get current dir")?;
     target.push(file_name);
-
     let file = File::create(target)?;
 
     Ok(file)

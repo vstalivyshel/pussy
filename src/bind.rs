@@ -66,7 +66,7 @@ impl ShaderBindings {
         }
     }
 
-    pub fn update_time(&mut self, t: &crate::util::TimeMeasure, queue: &wgpu::Queue) {
+    pub fn update_time(&mut self, t: &crate::util::Time, queue: &wgpu::Queue) {
         self.time.data = t.start.elapsed().as_secs_f32();
         self.time.stage(queue);
     }
