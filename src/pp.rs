@@ -51,7 +51,7 @@ impl ShaderSource {
         Ok(Self(source))
     }
 
-    pub fn into_inner(self) -> String {
+    pub fn _into_inner(self) -> String {
         self.0
     }
 
