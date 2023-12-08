@@ -2,9 +2,9 @@ mod bind;
 mod capture;
 mod ctx;
 mod pp;
-mod util;
+mod utils;
 
-use crate::{ctx::WgpuContext, util::Msg};
+use crate::{ctx::WgpuContext, utils::Msg};
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -18,13 +18,13 @@ async fn draw(shader_path: &str) {
         .with_title("puss")
         .build(&event_loop)
         .expect("create window");
-    let file_watcher = match crate::util::FileWatcher::new(&shader_path) {
+    let file_watcher = match crate::utils::FileWatcher::new(&shader_path) {
         Ok(watcher) => watcher,
         Err(e) => return eprintln!("{e}"),
     };
-    let channel = crate::util::Channel::new();
+    let channel = crate::utils::Channel::new();
     let mut ctx = WgpuContext::new(window, shader_path).await;
-    let mut time = crate::util::Time::new();
+    let mut time = crate::utils::Time::new();
     let mut capturing_frames = false;
 
     event_loop.run(move |ev, _, cf| {
@@ -35,6 +35,7 @@ async fn draw(shader_path: &str) {
                 // TODO: handle errors and other events
                 while let Ok(Ok(event)) = file_watcher.receiver.try_recv() {
                     if let notify::event::EventKind::Modify(_) = event.kind {
+                        crate::utils::clear_screen();
                         ctx.rebuild_shader()
                     }
                 }
@@ -56,7 +57,7 @@ async fn draw(shader_path: &str) {
                         ..
                     } => channel.send_msg(Msg::SavePng {
                         frame: ctx.render_into_frame_buffer(),
-                        resolution: ctx.size,
+                        resolution: ctx.resolution,
                     }),
                     KeyboardInput {
                         state: ElementState::Pressed,
@@ -76,7 +77,7 @@ async fn draw(shader_path: &str) {
                         ..
                     } if !capturing_frames => channel.send_msg(Msg::SaveMp4 {
                         rate: time.delta as _,
-                        resolution: ctx.size,
+                        resolution: ctx.resolution,
                     }),
                     _ => {}
                 },
@@ -88,10 +89,19 @@ async fn draw(shader_path: &str) {
                 WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                     ctx.resize(new_inner_size)
                 }
+                WindowEvent::CursorMoved { position, .. } => {
+                    let pos = position.cast::<f32>();
+                    ctx.bindings.mouse.update(&ctx.queue, [pos.x, pos.y])
+                }
                 _ => {}
             },
             Event::RedrawRequested(window_id) if window_id == ctx.window.id() => {
-                ctx.bindings.update_time(&time, &ctx.queue);
+                let q = &ctx.queue;
+                let res = ctx.resolution.cast::<f32>();
+                ctx.bindings
+                    .time
+                    .update(q, time.start.elapsed().as_secs_f32());
+                ctx.bindings.resolution.update(q, [res.width, res.height]);
                 time.update();
 
                 if capturing_frames {
@@ -123,11 +133,12 @@ fn main() {
         .unwrap()
         .block_on(async {
             env_logger::init();
-            crate::util::clear_screen();
+            crate::utils::clear_screen();
             if let Some(shader) = std::env::args().nth(1) {
                 draw(&shader).await;
             } else {
-                eprintln!("Shader path was not specifyed");
+                eprintln!("ERROR: Shader path was not specifyed");
+                std::process::exit(1);
             }
         })
 }

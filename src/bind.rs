@@ -1,74 +1,86 @@
-// Thx to https://github.com/compute-toys/wgpu-compute-toy/blob/b0d8c41a1885e7a13d4882a1f02d5df26305ec6b/src/bind.rs#L39
-// for idea and overall understanting
+macro_rules! shader_bindings_impl {
+    (
+        $(#[meta:meta])*
+        $vis:vis struct $struct_name:ident {
+            $( $field_vis:vis $field:ident : $type_of:ty = $decl:expr),+ $(,)?
+        }
+
+        $($fvis:vis fn $fname:ident($($fargs:tt)*) $(-> $ftype:ty)? $fblk:block)*
+
+    ) => {
+        $vis struct $struct_name {
+            $( $field_vis $field: $type_of),+
+        }
+
+        impl $struct_name {
+            $vis fn new(device: &wgpu::Device) -> Self {
+                Self {
+                    $( $field: BufferBinding::new(device, $decl), )+
+                }
+            }
+
+            fn to_vec(&self) -> Vec<&dyn Binding> {
+                vec![$( &self.$field ),+]
+            }
+
+            $( $fvis fn $fname ($($fargs)*) $(-> $ftype)? $fblk )*
+        }
+
+    }
+}
 
 trait Binding {
     fn bind(&self) -> wgpu::BindingResource;
     fn stage(&self, queue: &wgpu::Queue);
-    fn binding_type(&self) -> &wgpu::BindingType;
     fn as_wgsl_str(&self) -> &str;
 }
 
 pub struct BufferBinding<T> {
-    pub data: T,
-    decl: String,
-    #[allow(clippy::type_complexity)]
-    serialize: Box<dyn Fn(&T) -> Vec<u8>>,
+    data: T,
+    decl: &'static str,
     buffer: wgpu::Buffer,
-    binding_type: wgpu::BindingType,
-    bind: Box<dyn for<'a> Fn(&'a wgpu::Buffer) -> wgpu::BufferBinding<'a>>,
 }
 
-impl<T> Binding for BufferBinding<T> {
-    fn bind(&self) -> wgpu::BindingResource {
-        wgpu::BindingResource::Buffer((self.bind)(&self.buffer))
-    }
-
-    fn stage(&self, queue: &wgpu::Queue) {
-        let data = (self.serialize)(&self.data);
-        queue.write_buffer(&self.buffer, 0, &data);
-    }
-
-    fn binding_type(&self) -> &wgpu::BindingType {
-        &self.binding_type
-    }
-
-    fn as_wgsl_str(&self) -> &str {
-        &self.decl
-    }
-}
-
-pub struct ShaderBindings {
-    pub time: BufferBinding<f32>,
-}
-
-impl ShaderBindings {
-    pub fn new(device: &wgpu::Device) -> Self {
-        let binding_type = wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        };
-
+impl<T: bytemuck::Pod + Default> BufferBinding<T> {
+    fn new(device: &wgpu::Device, decl: &'static str) -> Self {
         Self {
-            time: BufferBinding {
-                decl: "var<uniform> TIME: f32".into(),
-                data: 0.,
-                serialize: Box::new(|d| bytemuck::bytes_of(d).to_vec()),
-                buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                    label: None,
-                    size: std::mem::size_of::<f32>() as u64,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
-                binding_type,
-                bind: Box::new(wgpu::Buffer::as_entire_buffer_binding),
-            },
+            decl,
+            data: T::default(),
+            buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: std::mem::size_of::<T>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
         }
     }
 
-    pub fn update_time(&mut self, t: &crate::util::Time, queue: &wgpu::Queue) {
-        self.time.data = t.start.elapsed().as_secs_f32();
-        self.time.stage(queue);
+    pub fn update(&mut self, q: &wgpu::Queue, new: T) {
+        self.data = new;
+        self.stage(q);
+    }
+}
+
+impl<T: bytemuck::Pod> Binding for BufferBinding<T> {
+    fn bind(&self) -> wgpu::BindingResource {
+        wgpu::BindingResource::Buffer(wgpu::Buffer::as_entire_buffer_binding(&self.buffer))
+    }
+
+    fn stage(&self, queue: &wgpu::Queue) {
+        let data = bytemuck::bytes_of(&self.data).to_vec();
+        queue.write_buffer(&self.buffer, 0, &data);
+    }
+
+    fn as_wgsl_str(&self) -> &str {
+        self.decl
+    }
+}
+
+shader_bindings_impl! {
+    pub struct ShaderBindings {
+        pub time: BufferBinding<f32> = "var<uniform> Time: f32",
+        pub resolution: BufferBinding<[f32; 2]> = "var<uniform> Resolution: vec2<f32>",
+        pub mouse: BufferBinding<[f32; 2]> = "var<uniform> Mouse: vec2<f32>",
     }
 
     pub fn create_bind_group_layout(&self, device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -78,10 +90,14 @@ impl ShaderBindings {
                 .to_vec()
                 .iter()
                 .enumerate()
-                .map(|(i, b)| wgpu::BindGroupLayoutEntry {
+                .map(|(i, _)| wgpu::BindGroupLayoutEntry {
                     binding: i as _,
                     visibility: wgpu::ShaderStages::all(),
-                    ty: *b.binding_type(),
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 })
                 .collect::<Vec<_>>(),
@@ -118,13 +134,5 @@ impl ShaderBindings {
                 }
             })
             .collect()
-    }
-
-    pub fn _stage(&self, queue: &wgpu::Queue) {
-        self.time.stage(queue);
-    }
-
-    fn to_vec(&self) -> Vec<&dyn Binding> {
-        vec![&self.time]
     }
 }
