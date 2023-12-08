@@ -4,13 +4,16 @@
 ### Progress:
 - [X] Hot reloading and syntax error reporting (to stdout).
 - [X] Global bindings (will add useful bindings as needed).
-  - `TIME` in seconds (f32) from the start of the renderer.
+  - `Time` - f32 time in seconds from the start of the renderer.
+  - `Mouse` - vec2<f32> cursor position.
+  - `Resolution` - vec2<f32> inner size of the window.
 - [X] Record and save shader output as an image/video.
   - F5 will 'screenshot' the current frame and save it as .png file.
   - F6 will start recording frames. Pressing it again stops recording.
   - F7 will save the recorded frames as .mp4 file.
 - [ ] GLSL support.
 - [ ] Little preprocessor (mostly for including files and configuring the renderer).
+  - Vertex shader `vs_main` entry is optional, fragment shader `fs_main` is required.
 - [ ] Load images and/or videos.
 
 ### All credits to:

@@ -1,7 +1,7 @@
 use crate::{
     bind::*,
     pp::ShaderSource,
-    util::{AllignedBufferSize, RawFrame},
+    utils::{AllignedBufferSize, RawFrame},
 };
 use std::path::PathBuf;
 use winit::{dpi::PhysicalSize, window::Window};
@@ -53,7 +53,7 @@ pub struct WgpuContext {
     pub output_buffer: Option<wgpu::Buffer>,
     pub output_texture: Option<wgpu::Texture>,
     pub device: wgpu::Device,
-    pub size: PhysicalSize<u32>,
+    pub resolution: PhysicalSize<u32>,
     pipeline: wgpu::RenderPipeline,
     config: wgpu::SurfaceConfiguration,
     surface: wgpu::Surface,
@@ -62,7 +62,7 @@ pub struct WgpuContext {
 
 impl WgpuContext {
     pub async fn new(window: Window, shader_path: PathBuf) -> Self {
-        let size = window.inner_size();
+        let resolution = window.inner_size();
         let instance = wgpu::Instance::default();
         let surface = unsafe { instance.create_surface(&window) }.expect("creating surface");
         let init = WgpuSetup::new(&instance, Some(&surface)).await;
@@ -74,8 +74,8 @@ impl WgpuContext {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
-            width: size.width,
-            height: size.height,
+            width: resolution.width,
+            height: resolution.height,
             present_mode: surface_caps.present_modes[0],
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
@@ -85,7 +85,9 @@ impl WgpuContext {
 
         let bindings = ShaderBindings::new(&init.device);
         let bind_group_layout = bindings.create_bind_group_layout(&init.device);
-        let shader_src = ShaderSource::validate(&shader_path, &bindings).unwrap_or_default();
+        let shader_src = ShaderSource::validate(&shader_path, &bindings)
+            .map_err(|e| eprintln!("{e}"))
+            .unwrap_or_default();
         let pipeline = create_render_pipeline(
             &init.device,
             &bind_group_layout,
@@ -103,12 +105,12 @@ impl WgpuContext {
             bindings,
             output_buffer: None,
             output_texture: None,
-            size,
+            resolution,
         }
     }
 
     pub fn rebuild_shader(&mut self) {
-        // crate::util::clear_screen();
+        // crate::utils::clear_screen();
         match ShaderSource::validate(&self.shader_path, &self.bindings) {
             Ok(ss) => {
                 let bgl = self.bindings.create_bind_group_layout(&self.device);
@@ -119,12 +121,12 @@ impl WgpuContext {
         }
     }
 
-    pub fn resize(&mut self, new_size: &PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
+    pub fn resize(&mut self, new_resolution: &PhysicalSize<u32>) {
+        if new_resolution.width > 0 && new_resolution.height > 0 {
+            self.config.width = new_resolution.width;
+            self.config.height = new_resolution.height;
             self.surface.configure(&self.device, &self.config);
-            self.size = *new_size;
+            self.resolution = *new_resolution;
         }
     }
 
@@ -149,7 +151,7 @@ impl WgpuContext {
 
     pub fn render_into_frame_buffer(&mut self) -> FrameBuffer {
         let bg = self.bindings.create_bind_group(&self.device);
-        let texture = create_texture(&self.device, &self.size);
+        let texture = create_texture(&self.device, &self.resolution);
 
         FrameBuffer::new(&self.device, &self.queue, &texture, &self.pipeline, &bg)
     }

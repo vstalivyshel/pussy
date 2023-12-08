@@ -20,10 +20,9 @@ pub struct FileWatcher {
 impl FileWatcher {
     pub fn new(file: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
         let (sender, receiver) = std::sync::mpsc::channel();
-        let watcher_config =
-            notify::Config::default().with_poll_interval(std::time::Duration::from_millis(500));
-        let mut watcher = notify::RecommendedWatcher::new(sender, watcher_config)
-            .context("Failed to init file watcher")?;
+        let mut watcher =
+            notify::recommended_watcher(sender).context("Failed to init file watcher")?;
+
         watcher
             .watch(file.as_ref(), notify::RecursiveMode::NonRecursive)
             .context("Failed to spawn a file watcher")?;

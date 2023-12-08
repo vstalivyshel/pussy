@@ -1,4 +1,4 @@
-use crate::util::RawFrame;
+use crate::utils::RawFrame;
 use anyhow::Context;
 use image::{codecs::png::PngEncoder, ImageEncoder};
 use std::{
@@ -11,9 +11,9 @@ pub fn save_raw_frame_as_png(frame: &[u8], size: &PhysicalSize<u32>) -> anyhow::
     if frame.is_empty() {
         return Err(anyhow::Error::msg("Data for PNG encoding is not provided"));
     }
-    let out_name = crate::util::current_time_string() + ".png";
+    let out_name = crate::utils::current_time_string() + ".png";
     log::info!("Saving png as {out_name}");
-    let target_file = crate::util::create_file_cwd(&out_name)
+    let target_file = crate::utils::create_file_cwd(&out_name)
         .context("Failed to create file for saving raw buffer as png")?;
     PngEncoder::new(target_file)
         .write_image(frame, size.width, size.height, image::ColorType::Rgba8)
@@ -31,7 +31,7 @@ pub fn save_raw_frames_as_mp4(
     if frames.is_empty() {
         return Err(anyhow::Error::msg("Data for MP4 encoding is not provided"));
     }
-    let out_name = crate::util::current_time_string() + ".mp4";
+    let out_name = crate::utils::current_time_string() + ".mp4";
     log::info!("Saving video as {out_name}");
     let size = format!("{width}x{height}", width = size.width, height = size.height);
     let rate = format!("{rate}");
