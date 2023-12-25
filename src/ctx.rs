@@ -1,4 +1,5 @@
 use crate::{
+    pp::{FS_ENTRY, VS_ENTRY},
     bind::*,
     pp::ShaderSource,
     utils::{AllignedBufferSize, RawFrame},
@@ -6,8 +7,7 @@ use crate::{
 use std::path::PathBuf;
 use winit::{dpi::PhysicalSize, window::Window};
 
-pub const VS_ENTRY: &str = "vs_main";
-pub const FS_ENTRY: &str = "fs_main";
+pub type TextBrush<'a> = wgpu_text::TextBrush<wgpu_text::glyph_brush::ab_glyph::FontRef<'a>>;
 
 pub struct WgpuSetup {
     pub device: wgpu::Device,
@@ -53,9 +53,10 @@ pub struct WgpuContext {
     pub output_buffer: Option<wgpu::Buffer>,
     pub output_texture: Option<wgpu::Texture>,
     pub device: wgpu::Device,
+    // TODO: use the config field or a method to retrive a resolution
     pub resolution: PhysicalSize<u32>,
+    pub config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
-    config: wgpu::SurfaceConfiguration,
     surface: wgpu::Surface,
     shader_path: PathBuf,
 }
@@ -63,7 +64,11 @@ pub struct WgpuContext {
 impl WgpuContext {
     pub async fn new(window: Window, shader_path: PathBuf) -> Self {
         let resolution = window.inner_size();
-        let instance = wgpu::Instance::default();
+        let backends = wgpu::util::backend_bits_from_env().unwrap_or_else(wgpu::Backends::all);
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..Default::default()
+        });
         let surface = unsafe { instance.create_surface(&window) }.expect("creating surface");
         let init = WgpuSetup::new(&instance, Some(&surface)).await;
 
@@ -130,7 +135,7 @@ impl WgpuContext {
         }
     }
 
-    pub fn render_frame(&self) -> Result<(), wgpu::SurfaceError> {
+    pub fn render_frame(&self, text_brush: &TextBrush) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let texture_view = output
             .texture
@@ -140,7 +145,7 @@ impl WgpuContext {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         let bg = self.bindings.create_bind_group(&self.device);
 
-        render_frame(&mut encoder, &self.pipeline, &bg, &texture_view);
+        render_frame(&mut encoder, &self.pipeline, &bg, &texture_view, text_brush);
 
         self.queue.submit(Some(encoder.finish()));
         // without this surface will not be updated
@@ -149,11 +154,11 @@ impl WgpuContext {
         Ok(())
     }
 
-    pub fn render_into_frame_buffer(&mut self) -> FrameBuffer {
+    pub fn render_into_frame_buffer(&mut self, text_brush: &TextBrush) -> FrameBuffer {
         let bg = self.bindings.create_bind_group(&self.device);
         let texture = create_texture(&self.device, &self.resolution);
 
-        FrameBuffer::new(&self.device, &self.queue, &texture, &self.pipeline, &bg)
+        FrameBuffer::new(&self.device, &self.queue, &texture, &self.pipeline, &bg, text_brush)
     }
 }
 
@@ -170,13 +175,14 @@ impl FrameBuffer {
         texture: &wgpu::Texture,
         pipeline: &wgpu::RenderPipeline,
         bind_group: &wgpu::BindGroup,
+        text_brush: &TextBrush,
     ) -> Self {
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let texture_size = texture.size();
         let mut encoder = create_encoder(device);
         let buffer_size = AllignedBufferSize::new(texture_size.width, texture_size.height);
         let buffer = create_buffer(device, buffer_size.buffer_size as _);
-        render_frame(&mut encoder, pipeline, bind_group, &texture_view);
+        render_frame(&mut encoder, pipeline, bind_group, &texture_view, text_brush);
         copy_texture_to_buffer(&mut encoder, texture, &buffer, &buffer_size);
         let submission_idx = queue.submit(Some(encoder.finish()));
 
@@ -216,6 +222,7 @@ pub fn render_frame(
     pipeline: &wgpu::RenderPipeline,
     bind_group: &wgpu::BindGroup,
     texture_view: &wgpu::TextureView,
+    text_brush: &TextBrush,
 ) {
     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: None,
@@ -229,12 +236,14 @@ pub fn render_frame(
                     b: 0.3,
                     a: 1.0,
                 }),
-                store: true,
+                store: wgpu::StoreOp::Store,
             },
         })],
         depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
     });
-
+    text_brush.draw(&mut render_pass);
     render_pass.set_bind_group(0, bind_group, &[]);
     render_pass.set_pipeline(pipeline);
     render_pass.draw(0..3, 0..1);

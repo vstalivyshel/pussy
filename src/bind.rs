@@ -78,6 +78,7 @@ impl<T: bytemuck::Pod> Binding for BufferBinding<T> {
 
 shader_bindings_impl! {
     pub struct ShaderBindings {
+        pub pi: BufferBinding<f32> = "var<uniform> PI: f32",
         pub time: BufferBinding<f32> = "var<uniform> Time: f32",
         pub resolution: BufferBinding<[f32; 2]> = "var<uniform> Resolution: vec2<f32>",
         pub mouse: BufferBinding<[f32; 2]> = "var<uniform> Mouse: vec2<f32>",

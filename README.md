@@ -11,6 +11,7 @@
   - F5 will 'screenshot' the current frame and save it as .png file.
   - F6 will start recording frames. Pressing it again stops recording.
   - F7 will save the recorded frames as .mp4 file.
+- [ ] Change the shader source file on the fly.
 - [ ] GLSL support.
 - [ ] Little preprocessor (mostly for including files and configuring the renderer).
   - Vertex shader `vs_main` entry is optional, fragment shader `fs_main` is required.

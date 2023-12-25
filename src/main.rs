@@ -5,6 +5,16 @@ mod pp;
 mod utils;
 
 use crate::{ctx::WgpuContext, utils::Msg};
+use wgpu_text::{
+    glyph_brush::{
+        BuiltInLineBreaker,
+        Layout,
+        Section,
+        Text,
+        VerticalAlign,
+    },
+    BrushBuilder,
+};
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -26,6 +36,30 @@ async fn draw(shader_path: &str) {
     let mut ctx = WgpuContext::new(window, shader_path).await;
     let mut time = crate::utils::Time::new();
     let mut capturing_frames = false;
+
+    // TODO:
+    let font = include_bytes!("font.ttf");
+    let mut text_brush = BrushBuilder::using_font_bytes(font).unwrap().build(
+        &ctx.device,
+        ctx.config.width,
+        ctx.config.height,
+        ctx.config.format,
+    );
+    let font_size = 25.;
+    let mut section = Section::default()
+        .add_text(
+            Text::new("Test text")
+                .with_scale(font_size)
+                .with_color([0.9, 0.5, 0.5, 1.0]),
+        )
+        .with_bounds((ctx.config.width as f32 * 0.4, ctx.config.height as f32))
+        .with_layout(
+            Layout::default()
+                .v_align(VerticalAlign::Center)
+                .line_breaker(BuiltInLineBreaker::AnyCharLineBreaker)
+        )
+        .with_screen_position((50., ctx.config.height as f32 * 0.5))
+        .to_owned();
 
     event_loop.run(move |ev, _, cf| {
         *cf = ControlFlow::Poll;
@@ -56,7 +90,7 @@ async fn draw(shader_path: &str) {
                         virtual_keycode: Some(VirtualKeyCode::F5),
                         ..
                     } => channel.send_msg(Msg::SavePng {
-                        frame: ctx.render_into_frame_buffer(),
+                        frame: ctx.render_into_frame_buffer(&text_brush),
                         resolution: ctx.resolution,
                     }),
                     KeyboardInput {
@@ -85,9 +119,19 @@ async fn draw(shader_path: &str) {
                     log::info!("Forced shutdown");
                     std::process::exit(0);
                 }
-                WindowEvent::Resized(physical_size) => ctx.resize(physical_size),
+                WindowEvent::Resized(new_size) => {
+                    // TODO:
+                    ctx.resize(new_size);
+                    section.bounds = (ctx.config.width as f32 * 0.4, ctx.config.height as f32);
+                    section.screen_position.1 = ctx.config.height as f32 * 0.5;
+                    text_brush.resize_view(ctx.config.width as f32, ctx.config.height as f32, &ctx.queue);
+                },
                 WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                    ctx.resize(new_inner_size)
+                    // TODO:
+                    ctx.resize(new_inner_size);
+                    section.bounds = (ctx.config.width as f32 * 0.4, ctx.config.height as f32);
+                    section.screen_position.1 = ctx.config.height as f32 * 0.5;
+                    text_brush.resize_view(ctx.config.width as f32, ctx.config.height as f32, &ctx.queue);
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     let pos = position.cast::<f32>();
@@ -97,6 +141,9 @@ async fn draw(shader_path: &str) {
             },
             Event::RedrawRequested(window_id) if window_id == ctx.window.id() => {
                 let q = &ctx.queue;
+
+                text_brush.queue(&ctx.device, &ctx.queue, vec![&section]).unwrap();
+
                 let res = ctx.resolution.cast::<f32>();
                 ctx.bindings
                     .time
@@ -105,10 +152,10 @@ async fn draw(shader_path: &str) {
                 time.update();
 
                 if capturing_frames {
-                    channel.send_msg(Msg::ExtractData(ctx.render_into_frame_buffer()));
+                    channel.send_msg(Msg::ExtractData(ctx.render_into_frame_buffer(&text_brush)));
                 }
 
-                match ctx.render_frame() {
+                match ctx.render_frame(&text_brush) {
                     Ok(_) => {}
                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                         log::info!("Resizing window");

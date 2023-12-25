@@ -11,8 +11,9 @@ crossterm = { version = "0.27.0", default-features = false }
 env_logger = "0.10.0"
 image = "0.24.7"
 log = "0.4.20"
-naga = { version = "0.13.0", features = [ "validate" ] }
+naga = { version = "*", features = [ "validate", "wgsl-in" ] }
 notify = "6.1.1"
 tokio = { version = "1.33.0", default-features = false, features = [ "sync", "rt-multi-thread" ] }
-wgpu = { version = "0.17.0", features = [ "glsl", "expose-ids" ] }
+wgpu = "*"
+wgpu_text = "0.8.5"
 winit = "0.28.6"

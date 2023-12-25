@@ -1,7 +1,9 @@
 use crate::bind::ShaderBindings;
-use crate::ctx::{FS_ENTRY, VS_ENTRY};
 use naga::{front::wgsl, valid};
 use std::path::Path;
+
+pub const VS_ENTRY: &str = "vs_main";
+pub const FS_ENTRY: &str = "fs_main";
 
 pub struct ShaderSource(String);
 
@@ -22,7 +24,6 @@ impl Default for ShaderSource {
 
 impl ShaderSource {
     pub fn validate(path: impl AsRef<Path>, bindings: &ShaderBindings) -> Result<Self, String> {
-        // TODO: catch redefenition of function
         let path = path.as_ref();
         let loaded = std::fs::read_to_string(path).map_err(|e| format!("{path:?}: {e}"))?;
         let mut source = loaded + &bindings.as_wgsl_string();
